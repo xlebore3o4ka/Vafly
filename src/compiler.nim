@@ -18,6 +18,13 @@ type
     filename*: string
     line*, col*: int
 
+  Context* = ref object
+    text*, filename*: string
+    pos*:  int
+    col*:  int
+    line*: int
+    parentheses*: seq[tuple[filename: string, col: int, line: int]]
+
 proc newSymForm*(original: string): Form =
   Form(kind: nkSym, symValue: original.toUpper(), original: original)
 
@@ -39,23 +46,23 @@ proc `$`*(form: Form): string =
     result &= ")"
   of nkStr: return form.strValue.repr
 
-template peek(text: string; pos: int): char =
-  if pos in 0..<text.len: text[pos] else: '\0'
+template peek(ctx: Context): char =
+  if ctx.pos in 0..<ctx.text.len: ctx.text[ctx.pos] else: '\0'
 
-template advance(text: string; pos: var int; col: var int; line: var int; n: int = 1) =
+template advance(ctx: Context, n: int = 1) =
   for _ in 0..<n:
-    if pos < text.len:
-      if text[pos] == '\n':
-        inc line
-        col = 1
+    if ctx.pos < ctx.text.len:
+      if ctx.text[ctx.pos] == '\n':
+        inc ctx.line
+        ctx.col = 1
       else:
-        inc col
-      inc pos
+        inc ctx.col
+      inc ctx.pos
 
-template next(text: string; pos: var int; col: var int; line: var int): char =
-  let c = text.peek(pos)
+template next(ctx: Context): char =
+  let c = ctx.peek()
   if c != '\0':
-    text.advance(pos, col, line)
+    ctx.advance()
   c
 
 template isDigit(c: char): bool =
@@ -64,93 +71,85 @@ template isDigit(c: char): bool =
 template isSym*(c: char): bool =
   c notin " \0\t\r\n;\"()':"
 
-proc parseForm*(text, filename: string; pos: var int; col: var int; line: var int): Form
+proc parseForm*(ctx: Context): Form
 
-proc parse*(text, filename: string; pos: var int; col: var int; line: var int): Form =
-  result = Form(kind: nkList, values: @[], filename: filename, col: col, line: line)
+proc parse*(ctx: Context): Form =
+  result = Form(kind: nkList, values: @[], filename: ctx.filename, col: ctx.col, line: ctx.line)
 
-  var parenthes: tuple[exists: bool, filename: string, col: int, line: int]
+  while ctx.peek() notin ")\0":
 
-  while (let c = text.peek(pos); c) notin "\0":
-
-    if c == '(': parenthes = (exists: true, filename: filename, col: col, line: line)
-    elif c == ')':
-      if not parenthes.exists: 
-        raise newException(ValueError, "$1:$2:$3: unmatched ')'" % [
-          filename, $line, $col
-        ])
-      parenthes.exists = false
-
-    let form = text.parseForm(filename, pos, col, line)
+    let form = ctx.parseForm()
     if form == nil: break
     result.values.add(form)
 
-  if parenthes.exists:
-    let (_, f, c, l) = parenthes
-    raise newException(ValueError, "$1:$2:$3: unclosed '('" % [
-      f, $c, $l
-    ])
+proc parseForm*(ctx: Context): Form =
+  while ctx.peek() in " \t\r\n":
+    ctx.advance()
 
-proc parseForm*(text, filename: string; pos: var int; col: var int; line: var int): Form =
-  while text.peek(pos) in " \t\r\n":
-    text.advance(pos, col, line)
+  if ctx.peek() == ';':
+    while ctx.peek() notin "\n\0":
+      ctx.advance()
 
-  if text.peek(pos) == ';':
-    while text.peek(pos) notin "\n\0":
-      text.advance(pos, col, line)
+    if ctx.peek() == '\n':
+      ctx.advance()
 
-    if text.peek(pos) == '\n':
-      text.advance(pos, col, line)
+    return ctx.parseForm()
 
-    return text.parseForm(filename, pos, col, line)
-
-  if text.peek(pos) in "\0)":
+  if ctx.peek() in "\0)":
     return nil
 
-  let formLine = line
-  let formCol = col
-  var c = text.next(pos, col, line)
+  let formLine = ctx.line
+  let formCol = ctx.col
+  var c = ctx.next()
 
-  if c.isDigit() or (c == '-' and text.peek(pos).isDigit()):
+  if c.isDigit() or (c == '-' and ctx.peek().isDigit()):
     var buffer: string
     buffer.add(c)
 
     while true:
-      let nextC = text.peek(pos)
+      let nextC = ctx.peek()
 
       if nextC.isDigit():
         buffer.add(nextC)
-        text.advance(pos, col, line)
+        ctx.advance()
       else: break
 
     result = newIntForm(buffer.parseInt())
 
   elif c == '"':
     var buffer: string
-    c = text.next(pos, col, line)
+    c = ctx.next()
 
     while c != '"' and c != '\0':
       buffer.add(c)
 
-      c = text.next(pos, col, line)
+      c = ctx.next()
 
     if c == '"':
       result = newStrForm(buffer.unescape)
     else:
       raise newException(ValueError, "$1:$2:$3: unterminated string literal" % [
-        filename, $line, $col
+        ctx.filename, $ctx.line, $ctx.col
       ])
 
   elif c == '(':
-    result = text.parse(filename, pos, col, line)
-    text.advance(pos, col, line)
+    ctx.parentheses.add((filename: ctx.filename, col: ctx.col, line: ctx.line))
+    
+    result = ctx.parse()
+    
+    if ctx.parentheses.len == 0: 
+      raise newException(ValueError, "$1:$2:$3: unmatched ')'" % [
+        ctx.filename, $ctx.line, $ctx.col
+      ])
+    discard ctx.parentheses.pop()
+    ctx.advance()
 
   elif c == '\'':
-    let form = text.parseForm(filename, pos, col, line)
+    let form = ctx.parseForm()
 
     if form == nil:
       raise newException(ValueError, "$1:$2:$3: expected form after '\\''" % [
-        filename, $line, $col
+        ctx.filename, $ctx.line, $ctx.col
       ])
 
     result = newListForm(@[
@@ -159,15 +158,15 @@ proc parseForm*(text, filename: string; pos: var int; col: var int; line: var in
     ])
 
   elif c == ':':
-    let sym = text.parseForm(filename, pos, col, line)
+    let sym = ctx.parseForm()
 
     if sym == nil:
       raise newException(ValueError, "$1:$2:$3: expected symbol after ':'" % [
-        filename, $line, $col
+        ctx.filename, $ctx.line, $ctx.col
       ])
     if sym.kind != nkSym:
       raise newException(ValueError, "$1:$2:$3: expected symbol, got $1" % [
-        filename, $line, $col, $sym.kind
+        ctx.filename, $ctx.line, $ctx.col, $sym.kind
       ])
 
     result = newListForm(@[
@@ -180,25 +179,28 @@ proc parseForm*(text, filename: string; pos: var int; col: var int; line: var in
     buffer.add(c)
 
     while true:
-      let nextC = text.peek(pos)
+      let nextC = ctx.peek()
 
       if nextC.isSym():
         buffer.add(nextC)
-        text.advance(pos, col, line)
+        ctx.advance()
 
       else:
         break
 
     result = newSymForm(buffer)
 
-  result.filename = filename
+  result.filename = ctx.filename
   result.line = formLine
   result.col = formCol
 
 proc parse*(text, filename: string): Form =
-  var
-    pos = 0
-    col = 1
-    line = 1
+  var ctx = Context(text: text, filename: filename, pos: 0, col: 0, line: 0, parentheses: @[])
 
-  text.parse(filename, pos, col, line)
+  result = parse(ctx)
+
+  if ctx.parentheses.len != 0:
+    let (f, c, l) = ctx.parentheses.pop()
+    raise newException(ValueError, "$1:$2:$3: unclosed '('" % [
+      f, $l, $c
+    ])
