@@ -12,3 +12,6 @@ bin           = @["lshl"]
 # Dependencies
 
 requires "nim >= 2.2.10"
+
+task myRun, "Run with debug flags":
+  exec "nimble run --debugger:native --stacktrace:on --linetrace:on --define:debug -- " & commandLineParams.join(" ")
