@@ -1,14 +1,1 @@
-(leth x 10)
-(leth y 20)
-(println "x = ~0, y = ~1, sum = ~2" x y (+ x y))
-
-(let ((a 5)
-      (b 10))
-  (println "a + b = ~0" (+ a b))
-  (println "a - b = ~0" (- a b)))
-
-(println "x still = ~0" x)  ; x не изменился
-
-(cond ((> x y) "x bigger")
-      ((< x y) "y bigger")
-      (else "equal"))
+(leth add (lambda (a b) (+ a b)))

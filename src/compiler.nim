@@ -225,66 +225,89 @@ proc parse*(text, filename: string): Form =
     ))
 
 type
-  Env* = ref object
-    parent*: Env
-    bindings*: Table[string, Form]
-
   IContext* = ref object
-    environment*: Env
+    environment*: Form
 
 proc symExists(ctx: IContext, name: string): bool =
   var env = ctx.environment
-  while env != nil:
-    if name in env.bindings:
+
+  while env != nil and env.values.len != 0:
+    if env.values[0].values.anyIt(it.values[0].symValue == name):
       return true
-    env = env.parent
+    env = env.values[1]
+
   return false
 
 proc getSym(ctx: IContext, name: string): Form =
   var env = ctx.environment
-  while env != nil:
-    if name in env.bindings:
-      return env.bindings[name]
-    env = env.parent
-  raise newException(ValueError, "undefined variable: " & name)
+
+  while env != nil and env.values.len != 0:
+    for pair in env.values[0].values:
+      if pair.values[0].symValue == name:
+        return pair.values[1]
+    env = env.values[1]
+
+  raise newException(ValueError, "undefined symbol: " & name)
 
 proc pushEnv(ctx: IContext) =
-  ctx.environment = Env(parent: ctx.environment, bindings: initTable[string, Form]())
+  ctx.environment = newListForm(@[
+    newListForm(@[]),
+    ctx.environment
+  ])
 
 proc popEnv(ctx: IContext) =
-  if ctx.environment != nil:
-    ctx.environment = ctx.environment.parent
-  else:
+  if ctx.environment == nil or ctx.environment.values.len == 0:
     raise newException(ValueError, "EnvStack underflow")
 
+  let parent = ctx.environment.values[1]
+  if parent == nil and ctx.environment.values[0].values.len > 0:
+    raise newException(ValueError, "EnvStack underflow")
+
+  ctx.environment = parent
+
 proc newSym(ctx: IContext, name: string, form: Form) =
-  if ctx.environment == nil:
+  var env = ctx.environment
+  if env == nil or env.values.len == 0:
     raise newException(ValueError, "Env is nil")
-  ctx.environment.bindings[name] = form
+
+  for pair in env.values[0].values:
+    if pair.values[0].symValue == name:
+      pair.values[1] = form
+      return
+
+  env.values[0].values.add(newListForm(@[
+    newSymForm(name), form
+  ]))
 
 proc setSym(ctx: IContext, name: string, form: Form) =
   var env = ctx.environment
-  while env != nil:
-    if name in env.bindings:
-      env.bindings[name] = form
-      return
-    env = env.parent
-  if ctx.environment != nil:
-    ctx.environment.bindings[name] = form
-  else:
+  while env != nil and env.values.len != 0:
+    for pair in env.values[0].values:
+      if pair.values[0].symValue == name:
+        pair.values[1] = form
+        return
+    env = env.values[1]
+
+  if ctx.environment == nil:
     raise newException(ValueError, "Env is nil")
+
+  ctx.environment.values[0].values.add(newListForm(@[
+    newSymForm(name), form
+  ]))
 
 proc eval*(ctx: IContext, form: Form): Form 
 
 var builtinDispatcher = initTable[string, proc (ctx: IContext, args: seq[Form]): Form]()
-var builtinBindings = initTable[string, Form]()
+var builtinBindings = newListForm(@[newListForm(@[]), newListForm(@[])])
 
 macro builtin(name: string, body: untyped): untyped =
   result = newStmtList()
   result.add quote do:
     builtinDispatcher[`name`] = proc (ctx {.inject.}: IContext, args {.inject.}: seq[Form]): Form =
       `body`
-    builtinBindings[`name`] = newListForm(@[newSymForm("<BUILTIN>")])
+    builtinBindings.values[0].values.add(newListForm(@[
+      newSymForm(`name`), newListForm(@[newSymForm(";BUILTIN")])
+    ]))
 
 template argN(a: int): Form =
   ctx.eval(args[a])
@@ -517,7 +540,7 @@ builtin "COND":
       raise newException(ValueError, "Expected form: '(form form)'")
 
     let cond = ctx.eval(pair[0]).formToBool
-    
+
     if cond:
       return ctx.eval(pair[1])
 
@@ -526,9 +549,6 @@ builtin "COND":
 builtin "EVAL":
   expectArgsN(1)
   return ctx.eval(argN(0))
-
-builtin "DEFUN":
-  discard 
 
 proc eval*(ctx: IContext, form: Form): Form =
   if form.kind == fkSym: 
@@ -558,14 +578,36 @@ proc eval*(ctx: IContext, form: Form): Form =
 
   let symForm = ctx.getSym(sym)
   
-  if symForm.values.len == 0 or symForm.values[0].kind != fkSym: return symForm
+  if symForm.kind != fkList or symForm.values.len == 0 or symForm.values[0].kind != fkSym:
+    return symForm
 
   let ty = symForm.values[0].symValue
 
-  if ty == "<BUILTIN>":
+  if ty == ";BUILTIN":
     return builtinDispatcher[sym](ctx, form.values[1..^1])
 
+  elif ty == ";LAMBDA":
+    let lambdaArgs = symForm.values[1].values
+
+    if form.values.len - 1 != lambdaArgs.len:
+      raise newException(ValueError, formatError(
+        form.filename, form.line, form.col,
+        "arguments mismatch (expected $1)", lambdaArgs.len
+      ))
+
+    let env = ctx.environment
+    ctx.environment = symForm.values[2]
+    ctx.pushEnv()
+
+    for n, argName in lambdaArgs:
+      ctx.newSym(argName.symValue, ctx.eval(form.values[1 + n]))
+
+    result = ctx.eval(symForm.values[3])
+
+    ctx.environment = env
+    return
+
+  return newListForm(@[])
+
 proc icontext*(): IContext =
-  return IContext(environment: Env(
-    bindings: builtinBindings
-  ))
+  return IContext(environment: builtinBindings)
