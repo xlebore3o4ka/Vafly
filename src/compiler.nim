@@ -37,16 +37,6 @@ proc newListForm*(values: seq[Form]): Form =
 proc newStrForm*(strValue: string): Form =
   Form(kind: fkStr, strValue: strValue)
 
-proc `$`*(form: Form): string =
-  if form == nil: return "NIL-VALUE"
-  case form.kind:
-  of fkSym: return form.symValue
-  of fkInt: return $form.intValue
-  of fkList:
-    result = "(" & form.values.mapIt($it).join(" ")
-    result &= ")"
-  of fkStr: return form.strValue.repr
-
 template peek(ctx: PContext): char =
   if ctx.pos in 0..<ctx.text.len: ctx.text[ctx.pos] else: '\0'
 
@@ -76,7 +66,7 @@ proc formatError(filename: string; line, col: int; message: string; args: vararg
   var msg = message
   for i, arg in args:
     msg = msg.replace("$" & $(i + 1), arg)
-  return "$1:$2:$3: " & msg % [filename, $line, $col]
+  return "$1:$2:$3: " % [filename, $line, $col] & msg
 
 proc parseForm*(ctx: PContext): Form
 
@@ -329,25 +319,75 @@ template expect(form: Form, ekind: FormKind): Form =
     raise newException(ValueError, "Expected " & $ekind & ", got " & $form.kind)
   form
 
+proc icontext*(): IContext =
+  return IContext(environment: builtinBindings)
+
+var testsExamples {.compiletime.}: seq[(NimNode, NimNode)]
+
+macro example(comparison: untyped) =
+  expectKind(comparison, nnkInfix)
+
+  let op = comparison[0]
+  if not op.eqIdent("=="):
+    error "example: expected '==' comparison, got '" & op.repr & "'", comparison
+
+  testsExamples.add (comparison[1], comparison[2])
+
+macro testExamples(): untyped =
+  result = newStmtList()
+
+  for i, (lvalue, rvalue) in testsExamples:
+    let ctxSym   = genSym(nskLet, "ctx"   & $i)
+    let lformSym = genSym(nskLet, "lform" & $i)
+    let rformSym = genSym(nskLet, "rform" & $i)
+
+    let lvalueStr = lvalue.strVal
+    let rvalueStr = rvalue.strVal
+    let lvalueNode = lvalue
+    let rvalueNode = rvalue
+    let lineInfo = lvalueNode.lineInfoObj
+
+    result.add quote do:
+      block:
+        let `ctxSym`   = icontext()
+        let `lformSym` = `ctxSym`.eval(parse(`lvalueNode`, "<exampleStringL>").values[0])
+        let `rformSym` = `ctxSym`.eval(parse(`rvalueNode`, "<exampleStringR>").values[0])
+        if not eqForm(`lformSym`, `rformSym`):
+          echo "example failed at ", `lineInfo`, ": ",
+            `lvalueStr`, " == ", `rvalueStr`,
+            "  (got ", `lformSym`.formToStr, " vs ", `rformSym`.formToStr, ")"
+
 builtin "+":
+  example "(+ 1 2)"   == "3"
+  example "(+ 10 13)" == "23"
+
   var res = argN(0).expect(fkInt).intValue
   for arg in args[1..^1]:
     res += ctx.eval(arg).expect(fkInt).intValue
   return newIntForm(res)
 
 builtin "-":
+  example "(- 5 3)"   == "2"
+  example "(- 10 4)"  == "6"
+
   var res = argN(0).expect(fkInt).intValue
   for arg in args[1..^1]:
     res -= ctx.eval(arg).expect(fkInt).intValue
   return newIntForm(res)
 
 builtin "*":
+  example "(* 2 3)"   == "6"
+  example "(* 4 5)"   == "20"
+
   var res = argN(0).expect(fkInt).intValue
   for arg in args[1..^1]:
     res *= ctx.eval(arg).expect(fkInt).intValue
   return newIntForm(res)
 
 builtin "DIV":
+  example "(DIV 6 2)"  == "3"
+  example "(DIV 20 4)" == "5"
+
   var res = argN(0).expect(fkInt).intValue
   for arg in args[1..^1]:
     res = res div ctx.eval(arg).expect(fkInt).intValue
@@ -368,6 +408,9 @@ proc eqForm(a, b: Form): bool =
     return true
 
 builtin "EQ":
+  example "(EQ 1 1)" == "1"
+  example "(EQ 1 2)" == "()"
+
   `expectArgs>=N`(2)
   let first = ctx.eval(argN(0))
   for i in 1 ..< args.len:
@@ -377,6 +420,9 @@ builtin "EQ":
   return newIntForm(1)
 
 builtin "NEQ":
+  example "(NEQ 1 2)" == "1"
+  example "(NEQ 1 1)" == "()"
+
   `expectArgs>=N`(2)
   let first = ctx.eval(argN(0))
   for i in 1 ..< args.len:
@@ -386,24 +432,36 @@ builtin "NEQ":
   return newIntForm(1)
 
 builtin ">":
+  example "(> 2 1)"   == "1"
+  example "(> 1 2)"   == "()"
+
   expectArgsN(2)
   let a = argN(0).expect(fkInt).intValue
   let b = argN(1).expect(fkInt).intValue
   if a > b: return newIntForm(1) else: return newListForm(@[])
 
 builtin "<":
+  example "(< 1 2)"   == "1"
+  example "(< 2 1)"   == "()"
+
   expectArgsN(2)
   let a = argN(0).expect(fkInt).intValue
   let b = argN(1).expect(fkInt).intValue
   if a < b: return newIntForm(1) else: return newListForm(@[])
 
 builtin ">=":
+  example "(>= 2 2)"  == "1"
+  example "(>= 1 2)"  == "()"
+
   expectArgsN(2)
   let a = argN(0).expect(fkInt).intValue
   let b = argN(1).expect(fkInt).intValue
   if a >= b: return newIntForm(1) else: return newListForm(@[])
 
 builtin "<=":
+  example "(<= 1 1)"  == "1"
+  example "(<= 2 1)"  == "()"
+
   expectArgsN(2)
   let a = argN(0).expect(fkInt).intValue
   let b = argN(1).expect(fkInt).intValue
@@ -418,6 +476,9 @@ proc formToBool(form: Form): bool =
   of fkList: return form.values.len != 0
 
 builtin "AND":
+  example "(AND 1 1)"   == "1"
+  example "(AND 1 ())"  == "()"
+
   `expectArgs>=N`(1)
   var last = newListForm(@[])
   for i in 0 ..< args.len:
@@ -428,6 +489,9 @@ builtin "AND":
   return last
 
 builtin "OR":
+  example "(OR () 1)"   == "1"
+  example "(OR () ())"  == "()"
+
   `expectArgs>=N`(1)
   for i in 0 ..< args.len:
     let val = ctx.eval(args[i])
@@ -436,16 +500,25 @@ builtin "OR":
   return newListForm(@[])
 
 builtin "QUOTE":
+  example "(QUOTE (+ 1 2))" == "'(+ 1 2)"
+  example "(QUOTE 5)"       == "5"
+
   expectArgsN(1)
   return args[0]
 
 builtin "NTH":
+  example "(NTH '(10 20 30) 0)" == "10"
+  example "(NTH '(10 20 30) 2)" == "30"
+
   expectArgsN(2)
   let list = argN(0).expect(fkList)
   let idx = argN(1).expect(fkInt).intValue
   return list.values[idx]
 
 builtin "LETH":
+  example "(LETH X 5)"  == "5"
+  example "(LETH Y 42)" == "42"
+
   expectArgsN(2)
 
   let name = args[0].expect(fkSym).symValue
@@ -455,6 +528,12 @@ builtin "LETH":
   return val
 
 builtin "LET":
+  example "(LET ((X 5)) X)"                     == "5"
+  example "(LET ((X 1) (Y 2)) (+ X Y))"         == "3"
+  example "(LET ((X 5)) X (+ X 1))"             == "6"
+  example "(LET ((X 5)) (+ X X))"               == "10"
+  example "(LET ((X 5)) (LET ((Y 6)) (+ X Y)))" == "11"
+
   `expectArgs>=N`(1)
   ctx.pushEnv()
 
@@ -477,6 +556,10 @@ builtin "LET":
   ctx.popEnv()
 
 builtin "SET":
+  example "(LET ((X 0)) (SET X 5) X)"                == "5"
+  example "(LET ((X 1) (Y 2)) (SET X 10) (+ X Y))"   == "12"
+  example "(LET ((X 1)) (LET ((Y 2)) (SET X 99)) X)" == "99"
+
   `expectArgs>=N`(2)
 
   let sym = args[0].expect(fkSym)
@@ -490,27 +573,30 @@ builtin "SET":
   
   return val
 
-proc formToStr(form: Form): string =
-    if form == nil: return "NIL"
-    case form.kind:
-    of fkStr: return form.strValue
-    of fkSym: return form.symValue
-    of fkInt: return $form.intValue
-    of fkList: return $form
+proc formToStr(form: Form, nestingLevel: Natural = 0): string =
+  if form == nil: return "NIL"
+  case form.kind:
+  of fkStr: return form.strValue
+  of fkSym: return form.symValue
+  of fkInt: return $form.intValue
+  of fkList: 
+    if nestingLevel > 4:
+      return "(...)"
+    return "(" & form.values.mapIt(it.formToStr(nestingLevel + 1)).join(" ") & ")"
 
 template `builtin-PRINF-impl`(line: static[bool]) =
   `expectArgs>=N`(1)
   `expectArgs<=N`(100)
 
-  var str = argN(0).expect(fkStr).strValue.replace("~~", "\x01")
+  var str = argN(0).expect(fkStr).strValue.replace("~~", "\\\x01")
 
   for n, arg in args[1..^1]:
     str = str.replace("~" & $n, formToStr ctx.eval(arg))
 
   when line:
-    stdout.writeLine str.replace("\x01", "~")
+    stdout.writeLine str.replace("\\\x01", "~")
   else:
-    stdout.write str.replace("\x01", "~")
+    stdout.write str.replace("\\\x01", "~")
 
   return newStrForm(str)
 
@@ -521,6 +607,10 @@ builtin "PRINTLN":
   `builtin-PRINF-impl`(true)
 
 builtin "IF":
+  example "(IF 1 10 20)"  == "10"
+  example "(IF 0 10 20)"  == "20"
+  example "(IF () 10 20)" == "20"
+
   expectArgsN(3)
 
   let cond = argN(0).formToBool
@@ -530,6 +620,10 @@ builtin "IF":
   return argN(2)
 
 builtin "COND":
+  example "(COND (1 10) (1 20))"    == "10"
+  example "(COND (0 10) (1 20))"    == "20"
+  example "(COND (() 10) (() 20))"  == "()"
+
   `expectArgs>=N`(1)
 
   for rawpair in args:
@@ -547,8 +641,57 @@ builtin "COND":
   return newListForm(@[])
 
 builtin "EVAL":
+  example "(EVAL '(+ 1 2))" == "3"
+  example "(EVAL ''(+ 1 2))" == "'(+ 1 2)"
+
   expectArgsN(1)
   return ctx.eval(argN(0))
+
+builtin "LAMBDA":
+  example "(LET ((FN (LAMBDA (X) X))) (FN 5))"                     == "5"
+  example "(LET ((FN (LAMBDA (X Y) (+ X Y)))) (FN 2 3))"           == "5"
+  example "(LET ((X 5)) (LET ((FN (LAMBDA (Y) (+ X Y)))) (FN 3)))" == "8"
+  example "(LET ((FN (LAMBDA () 42))) (FN))"                       == "42"
+  example "(LET ((FN (LAMBDA (X) (+ X 1)))) (FN (FN (FN 0))))"     == "3"
+  example "(LET ((ADD (LAMBDA (X Y) (+ X Y))) (MUL (LAMBDA (X Y) (* X Y)))) (ADD (MUL 2 3) 4))" == "10"
+
+  `expectArgs>=N`(1)
+
+  let lambdaArgs = args[0]
+  for arg in lambdaArgs.expect(fkList).values:
+    discard arg.expect(fkSym)
+
+  let body = newListForm(args[1..^1])
+
+  return newListForm(@[
+    newSymForm(";LAMBDA"), lambdaArgs, ctx.environment, body
+  ])
+
+proc funcall(ctx: IContext, funcForm: Form, form: Form): Form =
+  let lambdaArgs = funcForm.values[1].values
+
+  if form.values.len - 1 != lambdaArgs.len:
+    raise newException(ValueError, formatError(
+      form.filename, form.line, form.col,
+      "arguments mismatch (expected $1)", lambdaArgs.len
+    ))
+
+  var argValues = newSeq[Form](lambdaArgs.len)
+
+  for i in 0 ..< lambdaArgs.len:
+    argValues[i] = ctx.eval(form.values[1 + i])
+
+  let env = ctx.environment
+  ctx.environment = funcForm.values[2]
+  ctx.pushEnv()
+
+  try:
+    for i, argName in lambdaArgs:
+      ctx.newSym(argName.symValue, argValues[i])
+    for value in funcForm.values[3].values:
+      result = ctx.eval(value)
+  finally:
+    ctx.environment = env
 
 proc eval*(ctx: IContext, form: Form): Form =
   if form.kind == fkSym: 
@@ -562,52 +705,24 @@ proc eval*(ctx: IContext, form: Form): Form =
 
   elif form.kind in {fkInt, fkStr} or form.values.len == 0: 
     return form
-  elif form.values[0].kind != fkSym:
-    var evaluatedForm = newListForm(@[])
-    for val in form.values:
-      evaluatedForm.values.add ctx.eval(val)
-    return evaluatedForm
 
-  let sym = form.values[0].symValue 
+  let symForm = ctx.eval(form.values[0])
 
-  if not ctx.symExists(sym):
+  if symForm.kind != fkList or symForm.values[0].kind != fkSym:
     raise newException(ValueError, formatError(
       form.filename, form.line, form.col,
-      "Undefined symbol '$1'", form.values[0].original
+      "Cannot call $1", if symForm.kind != fkList: form.values[0].kind else: symForm.values[0].kind
     ))
-
-  let symForm = ctx.getSym(sym)
-  
-  if symForm.kind != fkList or symForm.values.len == 0 or symForm.values[0].kind != fkSym:
-    return symForm
 
   let ty = symForm.values[0].symValue
 
   if ty == ";BUILTIN":
-    return builtinDispatcher[sym](ctx, form.values[1..^1])
+    return builtinDispatcher[form.values[0].symValue](ctx, form.values[1..^1])
 
   elif ty == ";LAMBDA":
-    let lambdaArgs = symForm.values[1].values
-
-    if form.values.len - 1 != lambdaArgs.len:
-      raise newException(ValueError, formatError(
-        form.filename, form.line, form.col,
-        "arguments mismatch (expected $1)", lambdaArgs.len
-      ))
-
-    let env = ctx.environment
-    ctx.environment = symForm.values[2]
-    ctx.pushEnv()
-
-    for n, argName in lambdaArgs:
-      ctx.newSym(argName.symValue, ctx.eval(form.values[1 + n]))
-
-    result = ctx.eval(symForm.values[3])
-
-    ctx.environment = env
-    return
+    return ctx.funcall(symForm, form)
 
   return newListForm(@[])
 
-proc icontext*(): IContext =
-  return IContext(environment: builtinBindings)
+when isMainModule:
+  testExamples()

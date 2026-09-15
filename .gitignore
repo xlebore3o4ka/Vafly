@@ -1,3 +1,6 @@
 nimble.develop
 nimble.paths
 nimbledeps
+changes.txt
+gitchanges.txt
+bin/lshl

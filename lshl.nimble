@@ -13,5 +13,24 @@ bin           = @["lshl"]
 
 requires "nim >= 2.2.10"
 
-task myRun, "Run with debug flags":
-  exec "nimble run --debugger:native --stacktrace:on --linetrace:on --define:debug -- " & commandLineParams.join(" ")
+task myRun, "Run with the required flags":
+  exec "nimble --debugger:native --stacktrace:on --linetrace:on -d:debug --passC:-D_GNU_SOURCE -d:nimNoLentIterators run -- " & commandLineParams.join(" ")
+
+task allFiles, "Save all files content to file all_files.txt":
+  let ignoredPathes = @["./bin/*", "./.git/*", "./examples/*"]
+  let ignoredNames  = @["all_files.txt", "gitchanges.txt", "LICENSE", "secrets.nim", "nimble.paths", "state.json"]
+  
+  var pathFilters = ""
+  for p in ignoredPathes:
+    pathFilters &= " -not -path \"" & p & "\""
+  
+  var nameFilters = ""
+  for n in ignoredNames:
+    nameFilters &= " -not -name \"" & n & "\""
+  
+  let cmd = "find . -type f" & pathFilters & nameFilters & " -exec sh -c 'echo \"=== Файл: {} ===\" && cat {} && echo \"\"' \\; > all_files.txt"
+  
+  exec cmd
+
+task gitChanges, "Save all changes to file gitchanges.txt":
+  exec "git diff > gitchanges.txt"

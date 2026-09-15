@@ -25,7 +25,10 @@ proc main() =
 
   let content = readFile(filename)
   let code = content.parse(filename)
-  discard icontext().eval(code)
+  let ctx = icontext()
+
+  for form in code.values:
+    discard ctx.eval(form)
 
 when isMainModule:
   main()
