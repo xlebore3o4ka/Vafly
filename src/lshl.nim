@@ -1,5 +1,5 @@
 import std/[os, parseopt]
-import compiler
+import parser, forms
 
 proc main() =
   var
@@ -24,11 +24,13 @@ proc main() =
     return
 
   let content = readFile(filename)
-  let code = content.parse(filename)
-  let ctx = icontext()
+  let internmentData = newInternmentData()
+  let code = content.parse(filename, internmentData)
+  #let ctx = icontext()
 
-  for form in code.values:
-    discard ctx.eval(form)
+  #for form in code.values:
+  #  discard ctx.eval(form)
+  echo code.toStr(internmentData)
 
 when isMainModule:
   main()
