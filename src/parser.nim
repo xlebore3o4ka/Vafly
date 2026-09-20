@@ -219,4 +219,4 @@ proc parse*(text, filename: string, internmentData: InternmentData = newInternme
 
   except ParserError as e:
     stderr.writeLine(parser.toStr(e))
-    return newErrForm(newSymForm(`PARSER-ERROR`), e.message)
+    return newErrForm(newSymForm(`ERR-PARSER-ERROR`), e.message)

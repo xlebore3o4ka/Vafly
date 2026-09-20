@@ -23,7 +23,7 @@ type
     of fkSym:   symInterned*: int
     of fkInt:   intValue*:   int
     of fkMap:  
-      case      isNil*:      bool = true
+      case      mapIsNil*:   bool = true
       of false: mapValue*:   OrderedTable[Form, Form]
       else:     discard
     of fkStr:   strValue*:   string
@@ -31,7 +31,9 @@ type
                 errSym*:     Form
                 errMsg*:     string
 
-proc toStr*(self: Form, data: InternmentData = InternmentData()): string =
+proc newInternmentData*(): InternmentData
+
+proc toStr*(self: Form, data: InternmentData = newInternmentData()): string =
   case self.kind
   of fkSym:
     if self.symInterned >= 0 and self.symInterned < data.interning.len:
@@ -41,13 +43,13 @@ proc toStr*(self: Form, data: InternmentData = InternmentData()): string =
   of fkInt:
     $self.intValue
   of fkMap:
-    if self.isNil:
+    if self.mapIsNil:
       "nil"
     else:
       var parts: seq[string] = @[]
       for key, val in self.mapValue:
         parts.add((if key.kind != fkInt: key.toStr(data) & ": " else: "") & val.toStr(data))
-      if parts.len == 0: "nil" else: "(" & parts.join(" ") & ")"
+      if parts.len == 0: "()" else: "(" & parts.join(" ") & ")"
   of fkStr:
     "\"" & self.strValue & "\""
   of fkErr:
@@ -59,8 +61,8 @@ proc hash*(f: Form): Hash =
   of fkSym: result = result !& hash(f.symInterned)
   of fkInt: result = result !& hash(f.intValue)
   of fkMap:
-    result = result !& hash(f.isNil)
-    if not f.isNil:
+    result = result !& hash(f.mapIsNil)
+    if not f.mapIsNil:
       for k, v in f.mapValue:
         result = result !& hash(k)
         result = result !& hash(v)
@@ -82,13 +84,21 @@ proc `==`*(a, b: Form): bool =
   of fkErr:
     return a.errSym == b.errSym and a.errMsg == b.errMsg
   of fkMap:
-    if a.isNil != b.isNil: return false
-    if a.isNil: return true
+    if a.mapIsNil != b.mapIsNil: return false
+    if a.mapIsNil: return true
     if a.mapValue.len != b.mapValue.len: return false
     for k, v in a.mapValue:
       if not b.mapValue.hasKey(k): return false
       if b.mapValue[k] != v:       return false
     return true
+
+proc toBool*(form: Form): bool =
+  case form.kind
+  of fkMap:  not form.mapIsNil and form.mapValue.len != 0
+  of fkInt:  form.intValue != 0
+  of fkStr:  form.strValue.len != 0
+  of fkSym:  false
+  of fkErr:  false
 
 proc intern*(data: InternmentData, original: string): int =
   let name = original.toUpper()
@@ -100,14 +110,43 @@ proc intern*(data: InternmentData, original: string): int =
     data.interning.add(name)
     data.bindings[name] = result
 
-var requiredInterns*: InternmentData
-let `ENV-CURRENT`*    = requiredInterns.intern(";ENV-CURRENT")
-let `ENV-PARENT`*     = requiredInterns.intern(";ENV-PARENT")
+template unintern*(data: InternmentData, intern: int): string =
+  data.interning[intern]
+
+var requiredInterns*  = InternmentData()
 let `PARSER-KEYWORD`* = requiredInterns.intern(";KEYWORD")
 let `PARSER-QUOTE`*   = requiredInterns.intern("QUOTE")
-let `PARSER-ERROR`*   = requiredInterns.intern("ParserError!")
 
-proc newInternmentData(): InternmentData =
+let `ENV-CURRENT`*    = requiredInterns.intern(";ENV-CURRENT")
+let `ENV-PARENT`*     = requiredInterns.intern(";ENV-PARENT")
+
+let `EVAL-BUILTIN`*   = requiredInterns.intern(";BUILTIN")
+let `EVAL+`*          = requiredInterns.intern("+")
+let `EVAL-`*          = requiredInterns.intern("-")
+let `EVAL*`*          = requiredInterns.intern("*")
+let `EVAL-DIV`*       = requiredInterns.intern("DIV")
+let `EVAL-MOD`*       = requiredInterns.intern("MOD")
+let `EVAL-EQ`*        = requiredInterns.intern("EQ")
+let `EVAL-NEQ`*       = requiredInterns.intern("NEQ")
+let `EVAL>`*          = requiredInterns.intern(">")
+let `EVAL<`*          = requiredInterns.intern("<")
+let `EVAL>=`*         = requiredInterns.intern(">=")
+let `EVAL<=`*         = requiredInterns.intern("<=")
+let `EVAL-AND`*       = requiredInterns.intern("AND")
+let `EVAL-OR`*        = requiredInterns.intern("OR")
+let `EVAL-ALL`*       = requiredInterns.intern("ALL")
+let `EVAL-ANY`*       = requiredInterns.intern("ANY")
+let `EVAL-QUOTE`*     = requiredInterns.intern("QUOTE")
+let `EVAL-GET`*       = requiredInterns.intern("GET")
+
+let `ERR-PARSER-ERROR`*   = requiredInterns.intern("ERR-PARSER-ERROR!")
+let `ERR-UNBOUND-SYMBOL`* = requiredInterns.intern("ERR-UNBOUND-SYMBOL!")
+let `ERR-TYPE-MISMATCH`*  = requiredInterns.intern("ERR-TYPE-MISMATCH!")
+let `ERR-ARGS-MISMATCH`*  = requiredInterns.intern("ERR-ARGS-MISMATCH!")
+let `ERR-CANNOT-CALL`*    = requiredInterns.intern("ERR-CANNOT-CALL!")
+let `ERR-KEY-ERROR`*      = requiredInterns.intern("ERR-KEY-ERROR!")
+
+proc newInternmentData*(): InternmentData =
   result = InternmentData(
     bindings: initTable[string, int](),
     interning: @[]
@@ -142,13 +181,13 @@ macro variantWithLocation(name, signature, body: untyped): untyped =
 
 
 variantWithLocation newMapForm, proc (isNilArg: bool = true): Form:
-  Form(kind: fkMap, isNil: isNilArg)
+  Form(kind: fkMap, mapIsNil: isNilArg)
 
 variantWithLocation newMapForm, proc(mapValueArg: OrderedTable[Form, Form]): Form:
-  Form(kind: fkMap, isNil: false, mapValue: mapValueArg)
+  Form(kind: fkMap, mapIsNil: false, mapValue: mapValueArg)
 
 variantWithLocation newMapForm, proc(mapValueArg: seq[(Form, Form)]): Form:
-  Form(kind: fkMap, isNil: false, mapValue: mapValueArg.toOrderedTable)
+  Form(kind: fkMap, mapIsNil: false, mapValue: mapValueArg.toOrderedTable)
 
 template append*(mapValue: OrderedTable[Form, Form], value: Form) =
   var maxIdx = -1
@@ -160,6 +199,9 @@ template append*(mapValue: OrderedTable[Form, Form], value: Form) =
 template at*(mapValue: OrderedTable[Form, Form], index: int): Form =
   mapValue[newIntForm(index)]
 
+template atOrErr*(mapValue: OrderedTable[Form, Form], index: int, name: string = "?" & $index): Form =
+  mapValue.getOrDefault(newIntForm(index), newErrForm(newSymForm(`ERR-UNBOUND-SYMBOL`), 
+    "The symbol " & name & " has never been bound to any value"))
 
 variantWithLocation newSymForm, proc(symInternedArg: int): Form:
   Form(kind: fkSym, symInterned: symInternedArg)
