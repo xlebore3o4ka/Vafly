@@ -16,7 +16,7 @@ proc symExists(ctx: Context, intern: int): bool =
 
   return false
 
-proc getSym(ctx: Context, intern: int): Form =
+proc getSym(ctx: Context, intern: int, loc: LocationData): Form =
   var env = ctx.env
 
   while env != nil and (not env.mapIsNil) and env.mapValue.len != 0:
@@ -25,7 +25,7 @@ proc getSym(ctx: Context, intern: int): Form =
       return frame.mapValue[newIntForm(intern)]
     env = env.mapValue.at(`ENV-PARENT`)
 
-  return newErrForm(newSymForm(`ERR-UNBOUND-SYMBOL`), 
+  return loc.newErrForm(newSymForm(`ERR-UNBOUND-SYMBOL`),
     "The symbol " & ctx.internmentData.unintern(intern) & " has never been bound to any value")
 
 proc pushEnv(ctx: Context): Form =
@@ -55,7 +55,7 @@ proc newSym(ctx: Context, intern: int, val: Form) =
 
   frame.mapValue[newIntForm(intern)] = val
 
-proc setSym(ctx: Context, intern: int, val: Form): Form =
+proc setSym(ctx: Context, intern: int, val: Form, loc: LocationData): Form =
   var env = ctx.env
 
   while (not env.isNil()) and env.mapValue.len != 0:
@@ -67,7 +67,7 @@ proc setSym(ctx: Context, intern: int, val: Form): Form =
 
     env = env.mapValue[newIntForm(`ENV-PARENT`)]
 
-  result = newErrForm(newSymForm(`ERR-UNBOUND-SYMBOL`), 
+  result = loc.newErrForm(newSymForm(`ERR-UNBOUND-SYMBOL`),
     "The symbol " & ctx.internmentData.unintern(intern) & " has never been bound to any value")
 
 proc eval*(ctx: Context, form: Form): Form 
@@ -86,13 +86,15 @@ macro builtin(name: int, body: untyped): untyped =
     builtinBindings.mapValue[newIntForm(`name`)] = newMapForm( @{newIntForm(0): newSymForm(`evalBuiltin`)} )
 
 template arg(idx: int): Form =
-  args.atOrErr(idx + 1)
+  args.atOrErr(idx + 1, loc = args.at(0).locationData)
 
 template argEval(idx: int): Form =
-  ctx.eval(args.atOrErr(idx + 1))
+  ctx.eval(args.atOrErr(idx + 1, loc = args.at(0).locationData))
 
 template expect(form: Form, ekind: FormKind): Form =
-  if unlikely(form.kind != ekind): newErrForm(newSymForm(`ERR-TYPE-MISMATCH`), "Expected " & $ekind & ", got " & $form.kind)
+  if unlikely(form.kind != ekind):
+    form.locationData.newErrForm(newSymForm(`ERR-TYPE-MISMATCH`),
+      "Expected " & $ekind & ", got " & $form.kind)
   else: form
 
 macro expect(opSym: untyped, rv: static[int]): untyped =
@@ -102,7 +104,7 @@ macro expect(opSym: untyped, rv: static[int]): untyped =
 
   result = quote do:
     if not `cond`:
-      return newErrForm(newSymForm(`errArgsMismatch`),
+      return args.at(0).locationData.newErrForm(newSymForm(`errArgsMismatch`),
         "Arguments mismatch: expected len " & astToStr(`opSym`) & " " & $`rv` &
         ", got " & $(args.len - 1))
 
@@ -116,6 +118,9 @@ macro returnIfErr(form: untyped): untyped =
 
 template argEvalInt(idx: int): int =
   argEval(idx).returnIfErr().expect(fkInt).returnIfErr().intValue
+
+template has(idx: static[int]): bool =
+  args.hasKey(newIntForm(idx + 1))
 
 builtin `EVAL+`:
   expect `==`, 2
@@ -210,15 +215,26 @@ builtin `EVAL-OR`:
     return a
   return argEval(1).returnIfErr()
 
-builtin `EVAL-QUOTE`:
+builtin `PARSER-QUOTE`:
   expect `==`, 1
   return arg(0)
 
 builtin `EVAL-GET`:
-  expect `==`, 2
+  expect `>=`, 2
+  expect `<=`, 3
   let map = argEval(0).returnIfErr().expect(fkMap).returnIfErr()
   let key = argEval(1).returnIfErr()
-  return map.mapValue.getOrDefault(key, newErrForm(newSymForm(`ERR-KEY-ERROR`), "Key " & key.toStr & " not found"))
+  let default = if has(2): argEval(2).returnIfErr()
+    else: args.at(0).locationData.newErrForm(newSymForm(`ERR-KEY-ERROR`),
+            "Key " & key.toStr(ctx.internmentData) & " not found")
+  return map.mapValue.getOrDefault(key, default)
+
+builtin `EVAL-LOCAL`:
+  expect `==`, 2
+  let intern = arg(0).expect(fkSym).returnIfErr().symInterned
+  let value  = argEval(1).returnIfErr()
+  ctx.newSym(intern, value)
+  return value
 
 proc newContext*(internmentData: InternmentData = newInternmentData()): Context =
   var env = newMapForm(false)
@@ -234,21 +250,31 @@ proc newContext*(internmentData: InternmentData = newInternmentData()): Context 
   )
 
 proc eval*(ctx: Context, form: Form): Form =
-  if form.kind == fkSym: 
-    return ctx.getSym(form.symInterned)
+  if form.kind == fkSym:
+    if form.symInterned == `PARSER-KEYWORD`: return form
+    return ctx.getSym(form.symInterned, form.locationData)
 
-  elif form.kind in {fkInt, fkStr, fkErr} or form.mapIsNil or form.mapValue.len == 0: 
+  elif form.kind in {fkInt, fkStr, fkErr} or form.mapIsNil or form.mapValue.len == 0:
     return form
 
-  let callForm = ctx.eval(form.mapValue.at(0)).returnIfErr()
+  let headKey = newIntForm(0)
+  if not form.mapValue.hasKey(headKey):
+    return form.locationData.newErrForm(newSymForm(`ERR-CANNOT-CALL`),
+      "Cannot call " & form.toStr(ctx.internmentData))
 
-  if callForm.kind != fkMap or callForm.mapValue.at(0).kind != fkSym:
-    return newErrForm(newSymForm(`ERR-CANNOT-CALL`), "Cannot call " & 
-      (if callForm.kind != fkMap: $form.mapValue.at(0).kind else: $callForm.mapValue.at(0).kind))
+  let head = form.mapValue[headKey]
+  if head.kind == fkSym and head.symInterned == `PARSER-KEYWORD`:
+    return form
 
-  let ty = callForm.mapValue.at(0).symInterned
+  let callForm = ctx.eval(form.mapValue[headKey]).returnIfErr()
+
+  if callForm.kind != fkMap or callForm.mapIsNil or not callForm.mapValue.hasKey(headKey) or
+      callForm.mapValue[headKey].kind != fkSym:
+    return form.locationData.newErrForm(newSymForm(`ERR-CANNOT-CALL`), "Cannot call " &
+      (if callForm.kind != fkMap or callForm.mapIsNil: $form.mapValue[headKey].kind
+       else: $callForm.mapValue[headKey].kind))
+
+  let ty = callForm.mapValue[headKey].symInterned
 
   if ty == `EVAL-BUILTIN`:
-    return builtinDispatcher[form.mapValue.at(0).symInterned](ctx, form.mapValue)
-  elif ty == `PARSER-KEYWORD`:
-    return callForm
+    return builtinDispatcher[form.mapValue[headKey].symInterned](ctx, form.mapValue)

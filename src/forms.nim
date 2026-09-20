@@ -1,4 +1,4 @@
-import std/[tables, macros, hashes, strutils]
+import std/[tables, macros, hashes, strutils, strformat]
 
 type
   FormKind* = enum
@@ -53,7 +53,10 @@ proc toStr*(self: Form, data: InternmentData = newInternmentData()): string =
   of fkStr:
     "\"" & self.strValue & "\""
   of fkErr:
-    "err(" & self.errSym.toStr(data) & ", " & self.errMsg & ")"
+    let loc = self.locationData
+    let filename = if loc.filename != nil: loc.filename[] else: "?"
+    "err(" & self.errSym.toStr(data) & ", " & self.errMsg &
+      " @" & filename & ":" & $loc.line & ":" & $loc.col & ")"
 
 proc hash*(f: Form): Hash =
   result = result !& hash(ord(f.kind))
@@ -113,6 +116,19 @@ proc intern*(data: InternmentData, original: string): int =
 template unintern*(data: InternmentData, intern: int): string =
   data.interning[intern]
 
+proc errFormToStr*(text: string, err: Form, data: InternmentData): string =
+  let filename = err.locationData.filename[]
+  let col      = err.locationData.col
+  let line     = err.locationData.line
+  let message  = err.errMsg
+  let lexeme   = text.split("\n")[line - 1]
+  let errkind  = data.unintern(err.errSym.symInterned)
+
+  result = fmt"{filename}({line}:{col}) {errkind} {message}" & "\n"
+  result &= "  |\n"
+  result &= "  |  " & lexeme & "\n"
+  result &= "  ? " & " ".repeat(col) & "^"
+
 var requiredInterns*  = InternmentData()
 let `PARSER-KEYWORD`* = requiredInterns.intern(";KEYWORD")
 let `PARSER-QUOTE`*   = requiredInterns.intern("QUOTE")
@@ -136,8 +152,8 @@ let `EVAL-AND`*       = requiredInterns.intern("AND")
 let `EVAL-OR`*        = requiredInterns.intern("OR")
 let `EVAL-ALL`*       = requiredInterns.intern("ALL")
 let `EVAL-ANY`*       = requiredInterns.intern("ANY")
-let `EVAL-QUOTE`*     = requiredInterns.intern("QUOTE")
 let `EVAL-GET`*       = requiredInterns.intern("GET")
+let `EVAL-LOCAL`*     = requiredInterns.intern("LOCAL")
 
 let `ERR-PARSER-ERROR`*   = requiredInterns.intern("ERR-PARSER-ERROR!")
 let `ERR-UNBOUND-SYMBOL`* = requiredInterns.intern("ERR-UNBOUND-SYMBOL!")
@@ -199,9 +215,12 @@ template append*(mapValue: OrderedTable[Form, Form], value: Form) =
 template at*(mapValue: OrderedTable[Form, Form], index: int): Form =
   mapValue[newIntForm(index)]
 
-template atOrErr*(mapValue: OrderedTable[Form, Form], index: int, name: string = "?" & $index): Form =
-  mapValue.getOrDefault(newIntForm(index), newErrForm(newSymForm(`ERR-UNBOUND-SYMBOL`), 
-    "The symbol " & name & " has never been bound to any value"))
+template atOrErr*(mapValue: OrderedTable[Form, Form], index: int,
+                  name: string = "?" & $index,
+                  loc: LocationData = LocationData()): Form =
+  mapValue.getOrDefault(newIntForm(index),
+    loc.newErrForm(newSymForm(`ERR-UNBOUND-SYMBOL`),
+      "The symbol " & name & " has never been bound to any value"))
 
 variantWithLocation newSymForm, proc(symInternedArg: int): Form:
   Form(kind: fkSym, symInterned: symInternedArg)

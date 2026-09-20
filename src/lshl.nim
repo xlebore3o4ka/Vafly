@@ -1,13 +1,10 @@
-import std/[os, parseopt, tables, strutils]
+import std/[os, parseopt, tables, rdstdin]
 import parser, forms, evaluator
 
 proc repl(ctx: Context, internmentData: InternmentData) =
   echo ":quit / :q to exit"
   while true:
-    stdout.write(">>> ")
-    stdout.flushFile()
-
-    let line = stdin.readLine()
+    let line = readLineFromStdin("   >>> ")
 
     if line.len == 0:
       continue
@@ -28,7 +25,7 @@ proc repl(ctx: Context, internmentData: InternmentData) =
       continue
 
     if res.kind == fkErr:
-      stderr.writeLine("Error: " & res.errMsg)
+      echo line.errFormToStr(res, internmentData)
     else:
       echo res.toStr(internmentData)
 

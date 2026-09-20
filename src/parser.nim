@@ -25,8 +25,9 @@ proc toStr(self: Parser, err: ParserError): string =
   let lexeme   = self.text.split("\n")[line - 1]
 
   result = fmt"{filename}({line}:{col}) ParserError: {message}" & "\n"
-  result &= "  | " & " ".repeat(col) & "_" & "\n"
-  result &= "  |  " & lexeme
+  result &= "  |\n"
+  result &= "  |  " & lexeme & "\n"
+  result &= "  | " & " ".repeat(col) & "^"
 
 template peek(self: Parser): char =
   if self.offset >= self.textlen: '\0'
@@ -114,6 +115,21 @@ proc skipWhitespaces(self: Parser) =
     else: 
       self.advance()
 
+proc isKeywordPair(form: Form): bool =
+  if form.kind != fkMap or form.mapIsNil: return false
+  if not form.mapValue.hasKey(newIntForm(0)): return false
+  if not form.mapValue.hasKey(newIntForm(1)): return false
+  if form.mapValue.len != 2: return false
+
+  let head = form.mapValue.at(0)
+  if head.kind != fkMap or head.mapIsNil: return false
+  if not head.mapValue.hasKey(newIntForm(0)): return false
+  if not head.mapValue.hasKey(newIntForm(1)): return false
+  if head.mapValue.len != 2: return false
+
+  let headSym = head.mapValue.at(0)
+  headSym.kind == fkSym and headSym.symInterned == `PARSER-KEYWORD`
+
 template parseMap(self: Parser, locationDataArg: LocationData): Form =
   let temp = locationDataArg.newMapForm(false)
 
@@ -123,19 +139,15 @@ template parseMap(self: Parser, locationDataArg: LocationData): Form =
     if form.isNil():
       break
 
-    let kwform = if form.kind == fkMap and form.mapValue.len == 2: form.mapValue.at(0) else: nil
-    let kwsym  = if kwform != nil and kwform.kind == fkMap and kwform.mapValue.len == 2: kwform.mapValue.at(0) else: nil
-    let isKeywordPair = kwsym != nil and kwsym.kind == fkSym and kwsym.symInterned == `PARSER-KEYWORD`
-
-    if isKeywordPair:
-      temp.mapValue[kwform.mapValue.at(1)] = form.mapValue.at(1)
+    if form.isKeywordPair():
+      temp.mapValue[form.mapValue.at(0).mapValue.at(1)] = form.mapValue.at(1)
     else:
       temp.mapValue.append(form)
 
   self.skipWhitespaces()
 
   if self.peek() == ')':
-    if self.parentheses.len == 0: 
+    if self.parentheses.len == 0:
       raise self.locationData.newParserError("Unmatched ')'")
 
     self.advance()
@@ -145,7 +157,7 @@ template parseMap(self: Parser, locationDataArg: LocationData): Form =
 
 template parseQuote(self: Parser, locationData: LocationData): Form =
   let temp = locationData.newMapForm(false)
-  temp.mapValue.append(newSymForm(`PARSER-QUOTE`))
+  temp.mapValue.append(locationData.newSymForm(`PARSER-QUOTE`))
 
   let form = self.parseForm()
   if form.isNil():
@@ -156,7 +168,7 @@ template parseQuote(self: Parser, locationData: LocationData): Form =
 
 template parseKeyword(self: Parser, locationData: LocationData): Form =
   let temp = locationData.newMapForm(false)
-  temp.mapValue.append(newSymForm(`PARSER-KEYWORD`))
+  temp.mapValue.append(locationData.newSymForm(`PARSER-KEYWORD`))
 
   let form = self.parseForm()
   if form.isNil():
@@ -205,6 +217,9 @@ proc parse(self: Parser, loc: LocationData = self.locationData): Form =
     if form == nil: break
     result.mapValue.append(form)
 
+  if self.peek() == ')':
+    raise self.locationData.newParserError("Unmatched ')'")
+
 proc parse*(text, filename: string, internmentData: InternmentData = newInternmentData()): Form =
   let parser = Parser(
     text: text, textlen: text.len, 
@@ -219,4 +234,4 @@ proc parse*(text, filename: string, internmentData: InternmentData = newInternme
 
   except ParserError as e:
     stderr.writeLine(parser.toStr(e))
-    return newErrForm(newSymForm(`ERR-PARSER-ERROR`), e.message)
+    return e.locationData.newErrForm(newSymForm(`ERR-PARSER-ERROR`), e.message)
