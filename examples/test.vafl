@@ -1,1 +1,12 @@
-(+ 10 4)
+; Пример синтаксиса Vafly
+(print "start")
+(local x 10)
+(set x (+ x 5.5))
+(print (if (> x 10) "big" "small"))
+(print (let ((y 2) (z 3)) (* y z)))
+(print (let ((f (lambda (a b) (+ a b)))) (f 4 5)))
+(print 'symbol :keyword)
+(print '(1 2.0 -3 +5 "str\n"))
+(print (>= 1 0) (<= 0 1) (+ 1 2) (- 5 3) (* 2 3) 
+  (div 6 2) (eq 1 1) (neq 1 2) (> 2 1) (< 1 2) (not 0) (mod 5 2) (and 1 1) (or 0 1))
+(print (some-function arg1 arg2))

@@ -33,31 +33,6 @@ type
 
 proc newInternmentData*(): InternmentData
 
-proc toStr*(self: Form, data: InternmentData = newInternmentData()): string =
-  case self.kind
-  of fkSym:
-    if self.symInterned >= 0 and self.symInterned < data.interning.len:
-      data.interning[self.symInterned]
-    else:
-      "?" & $self.symInterned
-  of fkInt:
-    $self.intValue
-  of fkMap:
-    if self.mapIsNil:
-      "nil"
-    else:
-      var parts: seq[string] = @[]
-      for key, val in self.mapValue:
-        parts.add((if key.kind != fkInt: key.toStr(data) & ": " else: "") & val.toStr(data))
-      if parts.len == 0: "()" else: "(" & parts.join(" ") & ")"
-  of fkStr:
-    "\"" & self.strValue & "\""
-  of fkErr:
-    let loc = self.locationData
-    let filename = if loc.filename != nil: loc.filename[] else: "?"
-    "err(" & self.errSym.toStr(data) & ", " & self.errMsg &
-      " @" & filename & ":" & $loc.line & ":" & $loc.col & ")"
-
 proc hash*(f: Form): Hash =
   result = result !& hash(ord(f.kind))
   case f.kind
@@ -116,7 +91,7 @@ proc intern*(data: InternmentData, original: string): int =
 template unintern*(data: InternmentData, intern: int): string =
   data.interning[intern]
 
-proc errFormToStr*(text: string, err: Form, data: InternmentData): string =
+proc errFormToStr*(text: string, err: Form, data: InternmentData, stacktrace: Form): string =
   let filename = err.locationData.filename[]
   let col      = err.locationData.col
   let line     = err.locationData.line
@@ -124,7 +99,16 @@ proc errFormToStr*(text: string, err: Form, data: InternmentData): string =
   let lexeme   = text.split("\n")[line - 1]
   let errkind  = data.unintern(err.errSym.symInterned)
 
-  result = fmt"{filename}({line}:{col}) {errkind} {message}" & "\n"
+  for (_, name) in stacktrace.mapValue.pairs:
+    let loc = name.locationData
+    let locFile = loc.filename[]
+    let locLine = loc.line
+    let locCol  = loc.col
+    let locStr  = fmt"{locFile}({locLine}:{locCol})"
+
+    result = locStr & " ".repeat(max(30 - locStr.len, 1)) & "in " & data.unintern(name.symInterned) & "\n" & result
+
+  result &= fmt"{filename}({line}:{col}) {errkind} {message}" & "\n"
   result &= "  |\n"
   result &= "  |  " & lexeme & "\n"
   result &= "  ? " & " ".repeat(col) & "^"
@@ -137,6 +121,9 @@ let `ENV-CURRENT`*    = requiredInterns.intern(";ENV-CURRENT")
 let `ENV-PARENT`*     = requiredInterns.intern(";ENV-PARENT")
 
 let `EVAL-BUILTIN`*   = requiredInterns.intern(";BUILTIN")
+let `EVAL-T-LAMBDA`*  = requiredInterns.intern(";LAMBDA")
+let `EVAL-PARAM`*     = requiredInterns.intern(";PARAM")
+
 let `EVAL+`*          = requiredInterns.intern("+")
 let `EVAL-`*          = requiredInterns.intern("-")
 let `EVAL*`*          = requiredInterns.intern("*")
@@ -154,6 +141,11 @@ let `EVAL-ALL`*       = requiredInterns.intern("ALL")
 let `EVAL-ANY`*       = requiredInterns.intern("ANY")
 let `EVAL-GET`*       = requiredInterns.intern("GET")
 let `EVAL-LOCAL`*     = requiredInterns.intern("LOCAL")
+let `EVAL-SET`*       = requiredInterns.intern("SET")
+let `EVAL-IF`*        = requiredInterns.intern("IF")
+let `EVAL-COND`*      = requiredInterns.intern("COND")
+let `EVAL-LET`*       = requiredInterns.intern("LET")
+let `EVAL-LAMBDA`*    = requiredInterns.intern("LAMBDA")
 
 let `ERR-PARSER-ERROR`*   = requiredInterns.intern("ERR-PARSER-ERROR!")
 let `ERR-UNBOUND-SYMBOL`* = requiredInterns.intern("ERR-UNBOUND-SYMBOL!")
@@ -161,6 +153,7 @@ let `ERR-TYPE-MISMATCH`*  = requiredInterns.intern("ERR-TYPE-MISMATCH!")
 let `ERR-ARGS-MISMATCH`*  = requiredInterns.intern("ERR-ARGS-MISMATCH!")
 let `ERR-CANNOT-CALL`*    = requiredInterns.intern("ERR-CANNOT-CALL!")
 let `ERR-KEY-ERROR`*      = requiredInterns.intern("ERR-KEY-ERROR!")
+let `ERR-ZERO-DIVISION`*  = requiredInterns.intern("ERR-ZERO-DIVISION!")
 
 proc newInternmentData*(): InternmentData =
   result = InternmentData(
@@ -181,11 +174,14 @@ macro variantWithLocation(name, signature, body: untyped): untyped =
 
   let tmp = ident("frmTmp")
   let withLoc = nnkStmtListExpr.newTree(
-    nnkVarSection.newTree(nnkIdentDefs.newTree(
-      tmp, newEmptyNode(), body.copyNimTree)),
-    newAssignment(nnkDotExpr.newTree(tmp, ident"locationData"),
-                  ident"locationDataSym"),
-    tmp)
+    nnkBlockStmt.newTree(
+      newEmptyNode(),
+      nnkStmtList.newTree(
+        nnkVarSection.newTree(nnkIdentDefs.newTree(
+          tmp, newEmptyNode(), body.copyNimTree)),
+        newAssignment(nnkDotExpr.newTree(tmp, ident"locationData"),
+                      ident"locationDataSym"),
+        tmp)))
 
   template mk(fp, stmts: NimNode): untyped =
     nnkTemplateDef.newTree(pubName, newEmptyNode(), newEmptyNode(), fp,
@@ -194,7 +190,6 @@ macro variantWithLocation(name, signature, body: untyped): untyped =
   result = newStmtList(
     mk(fp1, body),
     mk(fp2, withLoc))
-
 
 variantWithLocation newMapForm, proc (isNilArg: bool = true): Form:
   Form(kind: fkMap, mapIsNil: isNilArg)
@@ -211,6 +206,17 @@ template append*(mapValue: OrderedTable[Form, Form], value: Form) =
     if k.kind == fkInt:
       maxIdx = max(maxIdx, k.intValue)
   mapValue[newIntForm(maxIdx + 1)] = value
+
+template pop*(mapValue: OrderedTable[Form, Form]): Form =
+  var maxIdx = -1
+  for k in mapValue.keys:
+    if k.kind == fkInt:
+      maxIdx = max(maxIdx, k.intValue)
+
+  let key = newIntForm(maxIdx)
+  let value = mapValue[key]
+  mapValue.del(key)
+  value
 
 template at*(mapValue: OrderedTable[Form, Form], index: int): Form =
   mapValue[newIntForm(index)]
@@ -234,3 +240,31 @@ variantWithLocation newIntForm, proc(intValueArg: int): Form:
 
 variantWithLocation newErrForm, proc(errSymArg: Form, errMsgArg: string = ""): Form:
   Form(kind: fkErr, errSym: errSymArg, errMsg: errMsgArg)
+
+
+proc toStr*(self: Form, data: InternmentData = newInternmentData()): string =
+  case self.kind
+  of fkSym:
+    if self.symInterned >= 0 and self.symInterned < data.interning.len:
+      data.interning[self.symInterned]
+    else:
+      "?" & $self.symInterned
+  of fkInt:
+    $self.intValue
+  of fkMap:
+    if self.mapIsNil:
+      "nil"
+    elif newSymForm(`ENV-CURRENT`) in self.mapValue or newSymForm(`ENV-PARENT`) in self.mapValue:
+      ";ENVIROMENT"
+    else:
+      var parts: seq[string] = @[]
+      for key, val in self.mapValue:
+        parts.add((if key.kind != fkInt: key.toStr(data) & ": " else: "") & val.toStr(data))
+      if parts.len == 0: "()" else: "(" & parts.join(" ") & ")"
+  of fkStr:
+    "\"" & self.strValue & "\""
+  of fkErr:
+    let loc = self.locationData
+    let filename = if loc.filename != nil: loc.filename[] else: "?"
+    "err(" & self.errSym.toStr(data) & ", " & self.errMsg &
+      " @" & filename & ":" & $loc.line & ":" & $loc.col & ")"

@@ -3,21 +3,29 @@ import parser, forms, evaluator
 
 proc repl(ctx: Context, internmentData: InternmentData) =
   echo ":quit / :q to exit"
+  var counter = 0
+  var sources = initTable[string, string]()
+
   while true:
-    let line = readLineFromStdin("   >>> ")
+    let line = readLineFromStdin($counter & "   >>> ")
 
     if line.len == 0:
       continue
     if line == ":q" or line == ":quit":
       break
 
-    let code = line.parse("<repl>", internmentData)
+    inc counter
+    let filename = "<repl:" & $counter & ">"
+    sources[filename] = line
+
+    let code = line.parse(filename, internmentData)
     var res: Form
 
     if code.kind == fkErr:
       stderr.writeLine("Error: " & code.errMsg)
       continue
 
+    ctx.stacktrace = newMapForm(false)
     for form in code.mapValue.values:
       res = ctx.eval(form)
 
@@ -25,7 +33,8 @@ proc repl(ctx: Context, internmentData: InternmentData) =
       continue
 
     if res.kind == fkErr:
-      echo line.errFormToStr(res, internmentData)
+      let errFile = res.locationData.filename[]
+      echo sources[errFile].errFormToStr(res, internmentData, ctx.stacktrace)
     else:
       echo res.toStr(internmentData)
 

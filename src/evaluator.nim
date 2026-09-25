@@ -5,14 +5,15 @@ type
   Context* = ref object
     internmentData*: InternmentData
     env*:            Form
+    stacktrace*:     Form
 
 proc symExists(ctx: Context, intern: int): bool =
   var env = ctx.env
 
   while env != nil and (not env.mapIsNil) and env.mapValue.len != 0:
-    if env.mapValue.at(`ENV-CURRENT`).mapValue.hasKey(newIntForm(intern)):
+    if env.mapValue[newSymForm(`ENV-CURRENT`)].mapValue.hasKey(newSymForm(intern)):
       return true
-    env = env.mapValue.at(`ENV-PARENT`)
+    env = env.mapValue[newSymForm(`ENV-PARENT`)]
 
   return false
 
@@ -20,52 +21,50 @@ proc getSym(ctx: Context, intern: int, loc: LocationData): Form =
   var env = ctx.env
 
   while env != nil and (not env.mapIsNil) and env.mapValue.len != 0:
-    let frame = env.mapValue.at(`ENV-CURRENT`)
-    if frame.mapValue.hasKey(newIntForm(intern)):
-      return frame.mapValue[newIntForm(intern)]
-    env = env.mapValue.at(`ENV-PARENT`)
+    let frame = env.mapValue[newSymForm(`ENV-CURRENT`)]
+    if frame.mapValue.hasKey(newSymForm(intern)):
+      return frame.mapValue[newSymForm(intern)]
+    env = env.mapValue[newSymForm(`ENV-PARENT`)]
 
   return loc.newErrForm(newSymForm(`ERR-UNBOUND-SYMBOL`),
     "The symbol " & ctx.internmentData.unintern(intern) & " has never been bound to any value")
 
-proc pushEnv(ctx: Context): Form =
+proc pushEnv(ctx: Context) =
   let newFrame = newMapForm(false)
   ctx.env = newMapForm(@{
-    newIntForm(`ENV-CURRENT`): newFrame,
-    newIntForm(`ENV-PARENT`): ctx.env
+    newSymForm(`ENV-CURRENT`): newFrame,
+    newSymForm(`ENV-PARENT`): ctx.env
   })
-  result = ctx.env
 
-proc popEnv(ctx: Context): Form =
+proc popEnv(ctx: Context) =
   assert not ctx.env.isNil(), "popEnv: env is nil"
   assert ctx.env.mapValue.len != 0, "popEnv: env is empty"
 
-  let parent = ctx.env.mapValue[newIntForm(`ENV-PARENT`)]
+  let parent = ctx.env.mapValue[newSymForm(`ENV-PARENT`)]
   assert not parent.isNil(), "popEnv: parent is nil"
 
   ctx.env = parent
-  result = ctx.env
 
 proc newSym(ctx: Context, intern: int, val: Form) =
   assert not ctx.env.isNil(), "newSym: env is nil"
   assert ctx.env.mapValue.len != 0, "newSym: env is empty"
 
-  let frame = ctx.env.mapValue[newIntForm(`ENV-CURRENT`)]
+  let frame = ctx.env.mapValue[newSymForm(`ENV-CURRENT`)]
   assert not frame.isNil(), "newSym: current frame is nil"
 
-  frame.mapValue[newIntForm(intern)] = val
+  frame.mapValue[newSymForm(intern)] = val
 
 proc setSym(ctx: Context, intern: int, val: Form, loc: LocationData): Form =
   var env = ctx.env
 
-  while (not env.isNil()) and env.mapValue.len != 0:
-    let frame = env.mapValue[newIntForm(`ENV-CURRENT`)]
+  while env != nil and (not env.mapIsNil) and env.mapValue.len != 0:
+    let frame = env.mapValue[newSymForm(`ENV-CURRENT`)]
 
-    if frame.mapValue.hasKey(newIntForm(intern)):
-      frame.mapValue[newIntForm(intern)] = val
+    if frame.mapValue.hasKey(newSymForm(intern)):
+      frame.mapValue[newSymForm(intern)] = val
       return val
 
-    env = env.mapValue[newIntForm(`ENV-PARENT`)]
+    env = env.mapValue[newSymForm(`ENV-PARENT`)]
 
   result = loc.newErrForm(newSymForm(`ERR-UNBOUND-SYMBOL`),
     "The symbol " & ctx.internmentData.unintern(intern) & " has never been bound to any value")
@@ -83,7 +82,7 @@ macro builtin(name: int, body: untyped): untyped =
   result.add quote do:
     builtinDispatcher[`name`] = proc (ctx {.inject.}: Context, args {.inject.}: OrderedTable[Form, Form]): Form =
       `body`
-    builtinBindings.mapValue[newIntForm(`name`)] = newMapForm( @{newIntForm(0): newSymForm(`evalBuiltin`)} )
+    builtinBindings.mapValue[newSymForm(`name`)] = newMapForm( @{newIntForm(0): newSymForm(`evalBuiltin`)} )
 
 template arg(idx: int): Form =
   args.atOrErr(idx + 1, loc = args.at(0).locationData)
@@ -136,11 +135,15 @@ builtin `EVAL*`:
 
 builtin `EVAL-DIV`:
   expect `==`, 2
-  return newIntForm(argEvalInt(0) div argEvalInt(1))
+  let b = argEvalInt(1)
+  if b == 0: return arg(1).locationData.newErrForm(newSymForm(`ERR-ZERO-DIVISION`))
+  return newIntForm(argEvalInt(0) div b)
 
 builtin `EVAL-MOD`:
   expect `==`, 2
-  return newIntForm(argEvalInt(0) mod argEvalInt(1))
+  let b = argEvalInt(1)
+  if b == 0: return arg(1).locationData.newErrForm(newSymForm(`ERR-ZERO-DIVISION`))
+  return newIntForm(argEvalInt(0) mod b)
 
 builtin `EVAL-EQ`:
   expect `==`, 2
@@ -187,7 +190,7 @@ builtin `EVAL<=`:
 builtin `EVAL-ALL`:
   expect `>=`, 1
   var last = newIntForm(1)
-  for i in 0 ..< args.len:
+  for i in 0 ..< args.len - 1:
     last = argEval(i).returnIfErr()
     if not last.toBool():
       return newMapForm(true)
@@ -195,7 +198,7 @@ builtin `EVAL-ALL`:
 
 builtin `EVAL-ANY`:
   expect `>=`, 1
-  for i in 0 ..< args.len:
+  for i in 0 ..< args.len - 1:
     let val = argEval(i).returnIfErr()
     if val.toBool():
       return val
@@ -224,10 +227,15 @@ builtin `EVAL-GET`:
   expect `<=`, 3
   let map = argEval(0).returnIfErr().expect(fkMap).returnIfErr()
   let key = argEval(1).returnIfErr()
-  let default = if has(2): argEval(2).returnIfErr()
-    else: args.at(0).locationData.newErrForm(newSymForm(`ERR-KEY-ERROR`),
-            "Key " & key.toStr(ctx.internmentData) & " not found")
-  return map.mapValue.getOrDefault(key, default)
+
+  if map.mapValue.hasKey(key):
+    return map.mapValue[key]
+
+  if has(2):
+    return argEval(2).returnIfErr()
+
+  return key.locationData.newErrForm(newSymForm(`ERR-KEY-ERROR`),
+    "Key " & key.toStr(ctx.internmentData) & " not found")
 
 builtin `EVAL-LOCAL`:
   expect `==`, 2
@@ -235,6 +243,82 @@ builtin `EVAL-LOCAL`:
   let value  = argEval(1).returnIfErr()
   ctx.newSym(intern, value)
   return value
+
+builtin `EVAL-SET`:
+  expect `==`, 2
+  let symForm = arg(0).returnIfErr().expect(fkSym).returnIfErr()
+  let value   = argEval(1).returnIfErr()
+  return ctx.setSym(symForm.symInterned, value, symForm.locationData)
+
+builtin `EVAL-IF`:
+  expect `>=`, 2
+  expect `<=`, 3
+
+  if argEval(0).returnIfErr().toBool():
+    return argEval(1).returnIfErr()
+
+  if has(2):
+    return argEval(2).returnIfErr()
+
+  return newMapForm(true)
+
+builtin `EVAL-COND`:
+  expect `>=`, 1
+  for i in 0 ..< args.len - 1:
+    let rawPair = arg(i).returnIfErr()
+    let pair = rawPair.expect(fkMap).returnIfErr()
+    if pair.mapValue.len != 2:
+      return rawPair.locationData.newErrForm(newSymForm(`ERR-ARGS-MISMATCH`),
+        "COND: expected pair of 2, got " & $pair.mapValue.len)
+    let condForm = pair.mapValue.at(0)
+    let bodyForm = pair.mapValue.at(1)
+    if ctx.eval(condForm).returnIfErr().toBool():
+      return ctx.eval(bodyForm)
+  return newMapForm(true)
+
+builtin `EVAL-LET`:
+  expect `>=`, 1
+
+  let bindingsForm = arg(0).returnIfErr().expect(fkMap).returnIfErr()
+
+  ctx.pushEnv()
+
+  try:
+    for i in 0 ..< bindingsForm.mapValue.len:
+      let pair = bindingsForm.mapValue.at(i).expect(fkMap).returnIfErr()
+      if pair.mapValue.len != 2:
+        return pair.locationData.newErrForm(newSymForm(`ERR-ARGS-MISMATCH`),
+          "LET: expected binding pair of 2, got " & $pair.mapValue.len)
+      let symForm = pair.mapValue.at(0).expect(fkSym).returnIfErr()
+      let value   = ctx.eval(pair.mapValue.at(1)).returnIfErr()
+      ctx.newSym(symForm.symInterned, value)
+
+    var res = newMapForm(true)
+    for i in 2 ..< args.len:
+      res = ctx.eval(args.at(i)).returnIfErr()
+    return res
+  finally:
+    ctx.popEnv()
+
+builtin `EVAL-LAMBDA`:
+  expect `>=`, 1
+
+  let paramsForm = arg(0).returnIfErr().expect(fkMap).returnIfErr()
+  var params = newMapForm(false)
+  for i in 0 ..< paramsForm.mapValue.len:
+    let sym = paramsForm.mapValue.at(i).expect(fkSym).returnIfErr()
+    params.mapValue[newSymForm(sym.symInterned)] = newSymForm(`EVAL-PARAM`)
+
+  var body = newMapForm(false)
+  for i in 2 ..< args.len:
+    body.mapValue.append(args.at(i))
+
+  return newMapForm(@{
+    newIntForm(0): newSymForm(`EVAL-T-LAMBDA`),
+    newIntForm(1): params,
+    newIntForm(2): ctx.env,
+    newIntForm(3): body
+  })
 
 proc newContext*(internmentData: InternmentData = newInternmentData()): Context =
   var env = newMapForm(false)
@@ -244,10 +328,43 @@ proc newContext*(internmentData: InternmentData = newInternmentData()): Context 
   Context(
     internmentData: internmentData,
     env: newMapForm(@{
-      newIntForm(`ENV-CURRENT`): env,
-      newIntForm(`ENV-PARENT`):  newMapForm()
-    })
+      newSymForm(`ENV-CURRENT`): env,
+      newSymForm(`ENV-PARENT`):  newMapForm()
+    }),
+    stacktrace: newMapForm(false)
   )
+
+proc funcall(ctx: Context, closure: Form, callForm: Form): Form =
+  let params = closure.mapValue.at(1)
+  let env    = closure.mapValue.at(2)
+  let body   = closure.mapValue.at(3)
+
+  let argc = callForm.mapValue.len - 1
+  if argc != params.mapValue.len:
+    return callForm.locationData.newErrForm(newSymForm(`ERR-ARGS-MISMATCH`),
+      "Arguments mismatch: expected " & $params.mapValue.len & ", got " & $argc)
+
+  var argValues = newSeq[Form](argc)
+  for i in 0 ..< argc:
+    argValues[i] = ctx.eval(callForm.mapValue.at(i + 1)).returnIfErr()
+
+  let oldEnv = ctx.env
+  ctx.env = env
+  ctx.pushEnv()
+
+  try:
+    var pi = 0
+    for intern, _ in params.mapValue.pairs:
+      ctx.newSym(intern.symInterned, argValues[pi])
+      inc pi
+
+    var res = newMapForm(true)
+    for i in 0 ..< body.mapValue.len:
+      res = ctx.eval(body.mapValue.at(i)).returnIfErr()
+    return res
+  finally:
+    ctx.popEnv()
+    ctx.env = oldEnv
 
 proc eval*(ctx: Context, form: Form): Form =
   if form.kind == fkSym:
@@ -266,15 +383,23 @@ proc eval*(ctx: Context, form: Form): Form =
   if head.kind == fkSym and head.symInterned == `PARSER-KEYWORD`:
     return form
 
-  let callForm = ctx.eval(form.mapValue[headKey]).returnIfErr()
+  let callForm = ctx.eval(head).returnIfErr()
 
   if callForm.kind != fkMap or callForm.mapIsNil or not callForm.mapValue.hasKey(headKey) or
       callForm.mapValue[headKey].kind != fkSym:
-    return form.locationData.newErrForm(newSymForm(`ERR-CANNOT-CALL`), "Cannot call " &
-      (if callForm.kind != fkMap or callForm.mapIsNil: $form.mapValue[headKey].kind
+    return head.locationData.newErrForm(newSymForm(`ERR-CANNOT-CALL`), "Cannot call " &
+      (if callForm.kind != fkMap or callForm.mapIsNil: $head.kind
        else: $callForm.mapValue[headKey].kind))
 
   let ty = callForm.mapValue[headKey].symInterned
+  let caused = form.mapValue[headKey]
 
   if ty == `EVAL-BUILTIN`:
-    return builtinDispatcher[form.mapValue[headKey].symInterned](ctx, form.mapValue)
+    result = builtinDispatcher[caused.symInterned](ctx, form.mapValue)
+    if result.kind == fkErr:
+      ctx.stacktrace.mapValue.append(caused)
+
+  elif ty == `EVAL-T-LAMBDA`:
+    result = funcall(ctx, callForm, form)
+    if result.kind == fkErr:
+      ctx.stacktrace.mapValue.append(caused.locationData.newSymForm(`EVAL-T-LAMBDA`))
