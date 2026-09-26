@@ -30,6 +30,7 @@ type
     of fkErr:   
                 errSym*:     Form
                 errMsg*:     string
+                errTrace*:   Form
 
 proc newInternmentData*(): InternmentData
 
@@ -91,15 +92,15 @@ proc intern*(data: InternmentData, original: string): int =
 template unintern*(data: InternmentData, intern: int): string =
   data.interning[intern]
 
-proc errFormToStr*(text: string, err: Form, data: InternmentData, stacktrace: Form): string =
-  let filename = err.locationData.filename[]
+proc errFormToStr*(text: string, err: Form, data: InternmentData): string =
+  let filename = if err.locationData.filename != nil: err.locationData.filename[] else: "?"
   let col      = err.locationData.col
   let line     = err.locationData.line
   let message  = err.errMsg
   let lexeme   = text.split("\n")[line - 1]
   let errkind  = data.unintern(err.errSym.symInterned)
 
-  for (_, name) in stacktrace.mapValue.pairs:
+  for (_, name) in err.errTrace.mapValue.pairs:
     let loc = name.locationData
     let locFile = loc.filename[]
     let locLine = loc.line
@@ -135,6 +136,7 @@ let `EVAL>`*          = requiredInterns.intern(">")
 let `EVAL<`*          = requiredInterns.intern("<")
 let `EVAL>=`*         = requiredInterns.intern(">=")
 let `EVAL<=`*         = requiredInterns.intern("<=")
+let `EVAL-NEG`*       = requiredInterns.intern("NEG")
 let `EVAL-AND`*       = requiredInterns.intern("AND")
 let `EVAL-OR`*        = requiredInterns.intern("OR")
 let `EVAL-ALL`*       = requiredInterns.intern("ALL")
@@ -146,6 +148,7 @@ let `EVAL-IF`*        = requiredInterns.intern("IF")
 let `EVAL-COND`*      = requiredInterns.intern("COND")
 let `EVAL-LET`*       = requiredInterns.intern("LET")
 let `EVAL-LAMBDA`*    = requiredInterns.intern("LAMBDA")
+let `EVAL-TRY`*       = requiredInterns.intern("TRY")
 
 let `ERR-PARSER-ERROR`*   = requiredInterns.intern("ERR-PARSER-ERROR!")
 let `ERR-UNBOUND-SYMBOL`* = requiredInterns.intern("ERR-UNBOUND-SYMBOL!")
@@ -237,10 +240,9 @@ variantWithLocation newStrForm, proc(strValueArg: string): Form:
 variantWithLocation newIntForm, proc(intValueArg: int): Form:
   Form(kind: fkInt, intValue: intValueArg)
 
-
-variantWithLocation newErrForm, proc(errSymArg: Form, errMsgArg: string = ""): Form:
-  Form(kind: fkErr, errSym: errSymArg, errMsg: errMsgArg)
-
+variantWithLocation newErrForm, proc(errSymArg: Form, errMsgArg: string = "",
+                                     errTraceArg: Form = newMapForm(false)): Form:
+  Form(kind: fkErr, errSym: errSymArg, errMsg: errMsgArg, errTrace: errTraceArg)
 
 proc toStr*(self: Form, data: InternmentData = newInternmentData()): string =
   case self.kind

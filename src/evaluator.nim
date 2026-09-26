@@ -5,7 +5,6 @@ type
   Context* = ref object
     internmentData*: InternmentData
     env*:            Form
-    stacktrace*:     Form
 
 proc symExists(ctx: Context, intern: int): bool =
   var env = ctx.env
@@ -187,6 +186,10 @@ builtin `EVAL<=`:
   else:
     return newMapForm(true)
 
+builtin `EVAL-NEG`:
+  expect `==`, 1
+  return newIntForm(-argEvalInt(0))
+
 builtin `EVAL-ALL`:
   expect `>=`, 1
   var last = newIntForm(1)
@@ -320,6 +323,37 @@ builtin `EVAL-LAMBDA`:
     newIntForm(3): body
   })
 
+builtin `EVAL-TRY`:
+  expect `>=`, 2
+  expect `<=`, 3
+
+  let bodyForm    = arg(0)
+  let handlerForm = arg(1)
+  let hasFinally  = has(2)
+  let finallyForm = if hasFinally: arg(2) else: nil
+
+  var res: Form
+
+  try:
+    let bodyRes = ctx.eval(bodyForm)
+    if bodyRes.kind == fkErr:
+      let callForm = newMapForm(@{
+        newIntForm(0): handlerForm,
+        newIntForm(1): newMapForm(@{newIntForm(0): newSymForm(`PARSER-QUOTE`), newIntForm(1): bodyRes.errSym}),
+        newIntForm(2): newStrForm(bodyRes.errMsg),
+        newIntForm(3): newMapForm(@{newIntForm(0): newSymForm(`PARSER-QUOTE`), newIntForm(1): bodyRes.errTrace})
+      })
+      res = ctx.eval(callForm)
+    else:
+      res = bodyRes
+  finally:
+    if hasFinally:
+      let finRes = ctx.eval(finallyForm)
+      if finRes.kind == fkErr:
+        res = finRes
+
+  return res
+
 proc newContext*(internmentData: InternmentData = newInternmentData()): Context =
   var env = newMapForm(false)
   for k, v in builtinBindings.mapValue.pairs:
@@ -330,8 +364,7 @@ proc newContext*(internmentData: InternmentData = newInternmentData()): Context 
     env: newMapForm(@{
       newSymForm(`ENV-CURRENT`): env,
       newSymForm(`ENV-PARENT`):  newMapForm()
-    }),
-    stacktrace: newMapForm(false)
+    })
   )
 
 proc funcall(ctx: Context, closure: Form, callForm: Form): Form =
@@ -397,9 +430,9 @@ proc eval*(ctx: Context, form: Form): Form =
   if ty == `EVAL-BUILTIN`:
     result = builtinDispatcher[caused.symInterned](ctx, form.mapValue)
     if result.kind == fkErr:
-      ctx.stacktrace.mapValue.append(caused)
+      result.errTrace.mapValue.append(caused)
 
   elif ty == `EVAL-T-LAMBDA`:
     result = funcall(ctx, callForm, form)
     if result.kind == fkErr:
-      ctx.stacktrace.mapValue.append(caused.locationData.newSymForm(`EVAL-T-LAMBDA`))
+      result.errTrace.mapValue.append(caused.locationData.newSymForm(`EVAL-T-LAMBDA`))

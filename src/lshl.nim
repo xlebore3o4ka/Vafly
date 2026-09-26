@@ -25,7 +25,6 @@ proc repl(ctx: Context, internmentData: InternmentData) =
       stderr.writeLine("Error: " & code.errMsg)
       continue
 
-    ctx.stacktrace = newMapForm(false)
     for form in code.mapValue.values:
       res = ctx.eval(form)
 
@@ -33,10 +32,13 @@ proc repl(ctx: Context, internmentData: InternmentData) =
       continue
 
     if res.kind == fkErr:
-      let errFile = res.locationData.filename[]
-      echo sources[errFile].errFormToStr(res, internmentData, ctx.stacktrace)
-    else:
-      echo res.toStr(internmentData)
+      let loc = res.locationData
+      if loc.filename != nil and sources.hasKey(loc.filename[]):
+        echo sources[loc.filename[]].errFormToStr(res, internmentData)
+      else:
+        echo "Error: " & res.errMsg
+
+    echo res.toStr(ctx.internmentData)
 
 proc runFile(filename: string) =
   if not fileExists(filename):
