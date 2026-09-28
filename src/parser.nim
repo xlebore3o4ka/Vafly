@@ -116,13 +116,13 @@ proc skipWhitespaces(self: Parser) =
       self.advance()
 
 proc isKeywordPair(form: Form): bool =
-  if form.kind != fkMap or form.mapIsNil: return false
+  if form.kind != fkMap: return false
   if not form.mapValue.hasKey(newIntForm(0)): return false
   if not form.mapValue.hasKey(newIntForm(1)): return false
   if form.mapValue.len != 2: return false
 
   let head = form.mapValue.at(0)
-  if head.kind != fkMap or head.mapIsNil: return false
+  if head.kind != fkMap: return false
   if not head.mapValue.hasKey(newIntForm(0)): return false
   if not head.mapValue.hasKey(newIntForm(1)): return false
   if head.mapValue.len != 2: return false
@@ -131,7 +131,7 @@ proc isKeywordPair(form: Form): bool =
   headSym.kind == fkSym and headSym.symInterned == `PARSER-KEYWORD`
 
 template parseMap(self: Parser, locationDataArg: LocationData): Form =
-  let temp = locationDataArg.newMapForm(false)
+  let temp = locationDataArg.newMapForm()
 
   while (let c = self.peek(); c) notin ")\0":
     let form = self.parseForm()
@@ -156,7 +156,7 @@ template parseMap(self: Parser, locationDataArg: LocationData): Form =
   temp
 
 template parseQuote(self: Parser, locationData: LocationData): Form =
-  let temp = locationData.newMapForm(false)
+  let temp = locationData.newMapForm()
   temp.mapValue.append(locationData.newSymForm(`PARSER-QUOTE`))
 
   let form = self.parseForm()
@@ -167,7 +167,7 @@ template parseQuote(self: Parser, locationData: LocationData): Form =
   temp
 
 template parseKeyword(self: Parser, locationData: LocationData): Form =
-  let temp = locationData.newMapForm(false)
+  let temp = locationData.newMapForm()
   temp.mapValue.append(locationData.newSymForm(`PARSER-KEYWORD`))
 
   let form = self.parseForm()
@@ -210,11 +210,11 @@ proc parseForm(self: Parser): Form =
     return self.parseSymbol(loc, c)
 
 proc parse(self: Parser, loc: LocationData = self.locationData): Form =
-  result = loc.newMapForm(false)
+  result = loc.newMapForm()
 
   while self.peek() notin "\0":
     let form = self.parseForm()
-    if form == nil: break
+    if form.isNil(): break
     result.mapValue.append(form)
 
   if self.peek() == ')':
