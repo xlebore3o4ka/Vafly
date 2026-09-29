@@ -130,6 +130,7 @@ let `EVAL-BUILTIN`*   = requiredInterns.intern(";BUILTIN")
 let `EVAL-T-LAMBDA`*  = requiredInterns.intern(";LAMBDA")
 let `EVAL-PARAM`*     = requiredInterns.intern(";PARAM")
 let `EVAL-FUNC`*      = requiredInterns.intern(";FUNC")
+let `EVAL-T-BECOME`*  = requiredInterns.intern(";BECOME")
 
 let `EVAL+`*          = requiredInterns.intern("+")
 let `EVAL-`*          = requiredInterns.intern("-")
@@ -160,6 +161,7 @@ let `EVAL-LEN`*       = requiredInterns.intern("LEN")
 let `EVAL-EVAL`*      = requiredInterns.intern("EVAL")
 let `EVAL-BUILD`*     = requiredInterns.intern("BUILD")
 let `EVAL-APPLY`*     = requiredInterns.intern("APPLY")
+let `EVAL-BECOME`*    = requiredInterns.intern("BECOME")
 
 let `ERR-PARSER-ERROR`*    = requiredInterns.intern("ERR-PARSER-ERROR!")
 let `ERR-UNBOUND-SYMBOL`*  = requiredInterns.intern("ERR-UNBOUND-SYMBOL!")
@@ -169,6 +171,8 @@ let `ERR-CANNOT-CALL`*     = requiredInterns.intern("ERR-CANNOT-CALL!")
 let `ERR-KEY-ERROR`*       = requiredInterns.intern("ERR-KEY-ERROR!")
 let `ERR-ZERO-DIVISION`*   = requiredInterns.intern("ERR-ZERO-DIVISION!")
 let `ERR-DUPLICATE-PARAM`* = requiredInterns.intern("ERR-DUPLICATE-PARAM!")
+let `ERR-BECOME-NON-TAIL`* = requiredInterns.intern("ERR-BECOME-NON-TAIL!")
+let `ERR-BECOME-NOT-FUNC`* = requiredInterns.intern("ERR-BECOME-NOT-FUNC!")
 
 proc newInternmentData*(): InternmentData =
   result = InternmentData(

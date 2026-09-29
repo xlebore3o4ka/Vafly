@@ -1,8 +1,17 @@
 import std/[os, parseopt, tables, rdstdin]
 import parser, forms, evaluator
 
+proc printEnv(ctx: Context, internmentData: InternmentData) =
+  let frame = ctx.env.get(newSymForm(`ENV-CURRENT`))
+  for key, val in frame.mapValue.pairs:
+    if val.kind == fkMap and val.posValue.len == 1 and
+       val.get(0).kind == fkSym and val.get(0).symInterned == `EVAL-BUILTIN`:
+      continue
+    let name = internmentData.unintern(key.symInterned)
+    stdout.writeLine(name & " = " & val.toStr(internmentData))
+
 proc repl(ctx: Context, internmentData: InternmentData) =
-  echo ":quit / :q to exit"
+  echo ":quit / :q to exit ; :env to show environment"
   var counter = 0
   var sources = initTable[string, string]()
 
@@ -13,6 +22,9 @@ proc repl(ctx: Context, internmentData: InternmentData) =
       continue
     if line == ":q" or line == ":quit":
       break
+    elif line == ":env":
+      printEnv(ctx, internmentData)
+      continue
 
     inc counter
     let filename = "<repl:" & $counter & ">"
@@ -47,6 +59,9 @@ proc runFile(filename: string) =
 
   let content = readFile(filename)
   let internmentData = newInternmentData()
+  var sources = initTable[string, string]()
+  sources[filename] = content
+
   let code = content.parse(filename, internmentData)
 
   if code.kind == fkErr:
@@ -56,7 +71,13 @@ proc runFile(filename: string) =
   let ctx = newContext(internmentData)
 
   for form in code.posValue:
-    discard ctx.eval(form)
+    let res = ctx.eval(form)
+    if res.kind == fkErr:
+      let loc = res.locationData
+      if loc.filename != nil and sources.hasKey(loc.filename[]):
+        echo sources[loc.filename[]].errFormToStr(res, internmentData)
+      else:
+        echo "Error: " & res.errMsg
 
 proc main() =
   var filename: string

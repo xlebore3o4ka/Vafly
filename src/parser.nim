@@ -97,12 +97,15 @@ template parseSymbol(self: Parser, locationData: LocationData, c: char): Form =
 
   while true:
     let nextC = self.peek()
-
+    
     if nextC.isSym():
       buffer.add(nextC)
       self.advance()
     else:
       break
+
+  if buffer.toUpper() == "NIL":
+    return locationData.newNilForm()
 
   locationData.newSymForm(self.internmentData.intern(buffer))
 

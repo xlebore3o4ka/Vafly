@@ -450,6 +450,29 @@ builtin `EVAL-APPLY`:
 
   return ctx.eval(callForm)
 
+# NOTE: BECOME only works correctly in tail position of a function body.
+# Using its result anywhere else (binding, condition, arithmetic, etc.)
+# is undefined behavior: the ;BECOME marker leaks as a plain value.
+builtin `EVAL-BECOME`:
+  expect `>=`, 1
+
+  var closure = argEval(0).returnIfErr()
+
+  if closure.kind == fkMap and closure.posValue.len > 0 and
+     closure.get(0).kind == fkSym and closure.get(0).symInterned == `EVAL-T-LAMBDA`:
+    discard
+  elif closure.kind == fkMap and closure.posValue.len > 0 and
+       closure.get(0).kind == fkSym and closure.get(0).symInterned == `EVAL-FUNC`:
+    closure = closure.get(2)
+  else:
+    return args.get(0).locationData.newErrForm(newSymForm(`ERR-BECOME-NOT-FUNC`),
+      "BECOME: not a function")
+
+  var marker = args.get(0).locationData.newMapForm(@[newSymForm(`EVAL-T-BECOME`), closure])
+  for i in 1 ..< args.posValue.len - 1:
+    marker.append(argEval(i).returnIfErr())
+  return marker
+
 proc newContext*(internmentData: InternmentData = newInternmentData()): Context =
   var env = newMapForm()
   for k, v in builtinBindings.mapValue.pairs:
@@ -463,37 +486,71 @@ proc newContext*(internmentData: InternmentData = newInternmentData()): Context 
     })
   )
 
-proc funcall(ctx: Context, closure: Form, callForm: Form): Form =
-  let params = closure.get(1)
-  let env    = closure.get(2)
-  let body   = closure.get(3)
+proc isBecomeMarker(form: Form): bool =
+  form.kind == fkMap and form.posValue.len > 0 and
+    form.get(0).kind == fkSym and form.get(0).symInterned == `EVAL-T-BECOME`
+
+proc bindFrame(ctx: Context, closure: Form, argValues: seq[Form]) =
+  let params     = closure.get(1)
+  let closureEnv = closure.get(2)
+
+  let frame = newMapForm()
+  var pi = 0
+  for paramSym, _ in params.mapValue.pairs:
+    frame.mapValue[newSymForm(paramSym.symInterned)] = argValues[pi]
+    inc pi
+
+  ctx.env = newMapForm(@{
+    newSymForm(`ENV-CURRENT`): frame,
+    newSymForm(`ENV-PARENT`):  closureEnv
+  })
+
+proc evalBodies(ctx: Context, body: Form): Form =
+  var res = newNilForm()
+  for i in 0 ..< body.posValue.len:
+    let r = ctx.eval(body.get(i))
+    if r.kind == fkErr: return r
+    if i < body.posValue.len - 1 and isBecomeMarker(r):
+      return body.get(i).locationData.newErrForm(newSymForm(`ERR-BECOME-NON-TAIL`),
+        "become in non-tail position")
+    res = r
+  return res
+
+proc funcall(ctx: Context, closureParam: Form, callForm: Form): Form =
+  let outerEnv = ctx.env
+  var loc = callForm.locationData
+  var closure = closureParam
 
   let argc = callForm.posValue.len - 1
-  if argc != params.mapValue.len:
-    return callForm.locationData.newErrForm(newSymForm(`ERR-ARGS-MISMATCH`),
-      "Arguments mismatch: expected " & $params.mapValue.len & ", got " & $argc)
-
   var argValues = newSeq[Form](argc)
   for i in 0 ..< argc:
-    argValues[i] = ctx.eval(callForm.get(i + 1)).returnIfErr()
+    argValues[i] = ctx.eval(callForm.get(i + 1))
+    if argValues[i].kind == fkErr:
+      ctx.env = outerEnv
+      return argValues[i]
 
-  let oldEnv = ctx.env
-  ctx.env = env
-  ctx.pushEnv()
+  while true:
+    if argValues.len != closure.get(1).mapValue.len:
+      ctx.env = outerEnv
+      return loc.newErrForm(newSymForm(`ERR-ARGS-MISMATCH`),
+        "Arguments mismatch: expected " & $closure.get(1).mapValue.len &
+        ", got " & $argValues.len)
 
-  try:
-    var pi = 0
-    for paramSym, _ in params.mapValue.pairs:
-      ctx.newSym(paramSym.symInterned, argValues[pi])
-      inc pi
+    bindFrame(ctx, closure, argValues)
 
-    var res = newNilForm()
-    for i in 0 ..< body.posValue.len:
-      res = ctx.eval(body.get(i)).returnIfErr()
+    let res = evalBodies(ctx, closure.get(3))
+    if res.kind == fkErr:
+      ctx.env = outerEnv
+      return res
+
+    if isBecomeMarker(res):
+      loc = res.locationData
+      closure = res.get(1)
+      argValues = res.posValue[2 .. ^1]
+      continue
+
+    ctx.env = outerEnv
     return res
-  finally:
-    ctx.popEnv()
-    ctx.env = oldEnv
 
 proc eval*(ctx: Context, form: Form): Form =
   if form.kind == fkSym:
