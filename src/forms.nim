@@ -20,16 +20,17 @@ type
 
   Form* = ref object
     locationData*: LocationData
-    case      kind*:       FormKind
+    case      kind*:        FormKind
     of fkSym: symInterned*: int
-    of fkInt: intValue*:   int
+    of fkInt: intValue*:    int
     of fkMap:  
-              mapValue*:   OrderedTable[Form, Form]
-    of fkStr: strValue*:   string
+              posValue*:    seq[Form]
+              mapValue*:    OrderedTable[Form, Form]
+    of fkStr: strValue*:    string
     of fkErr:   
-              errSym*:     Form
-              errMsg*:     string
-              errTrace*:   Form
+              errSym*:      Form
+              errMsg*:      string
+              errTrace*:    Form
     of fkNil: discard
 
 proc newInternmentData*(): InternmentData
@@ -40,6 +41,8 @@ proc hash*(f: Form): Hash =
   of fkSym: result = result !& hash(f.symInterned)
   of fkInt: result = result !& hash(f.intValue)
   of fkMap:
+    for v in f.posValue: 
+      result = result !& hash(v)
     for k, v in f.mapValue:
       result = result !& hash(k)
       result = result !& hash(v)
@@ -63,7 +66,10 @@ proc `==`*(a, b: Form): bool =
   of fkErr:
     return a.errSym == b.errSym and a.errMsg == b.errMsg
   of fkMap:
+    if a.posValue.len != b.posValue.len: return false
     if a.mapValue.len != b.mapValue.len: return false
+    for n, f in a.posValue:
+      if b.posValue[n] != f: return false
     for k, v in a.mapValue:
       if not b.mapValue.hasKey(k): return false
       if b.mapValue[k] != v:       return false
@@ -72,7 +78,7 @@ proc `==`*(a, b: Form): bool =
 proc toBool*(form: Form): bool =
   case form.kind
   of fkNil: false
-  of fkMap: form.mapValue.len != 0
+  of fkMap: form.posValue.len != 0 or form.mapValue.len != 0
   of fkInt: form.intValue != 0
   of fkStr: form.strValue.len != 0
   of fkSym: false
@@ -99,7 +105,7 @@ proc errFormToStr*(text: string, err: Form, data: InternmentData): string =
   let lexeme   = text.split("\n")[line - 1]
   let errkind  = data.unintern(err.errSym.symInterned)
 
-  for (_, name) in err.errTrace.mapValue.pairs:
+  for name in err.errTrace.posValue:
     let loc = name.locationData
     let locFile = loc.filename[]
     let locLine = loc.line
@@ -203,33 +209,8 @@ variantWithLocation newMapForm, proc(mapValueArg: OrderedTable[Form, Form]): For
 variantWithLocation newMapForm, proc(mapValueArg: seq[(Form, Form)]): Form:
   Form(kind: fkMap, mapValue: mapValueArg.toOrderedTable)
 
-template append*(mapValue: OrderedTable[Form, Form], value: Form) =
-  var maxIdx = -1
-  for k in mapValue.keys:
-    if k.kind == fkInt:
-      maxIdx = max(maxIdx, k.intValue)
-  mapValue[newIntForm(maxIdx + 1)] = value
-
-template pop*(mapValue: OrderedTable[Form, Form]): Form =
-  var maxIdx = -1
-  for k in mapValue.keys:
-    if k.kind == fkInt:
-      maxIdx = max(maxIdx, k.intValue)
-
-  let key = newIntForm(maxIdx)
-  let value = mapValue[key]
-  mapValue.del(key)
-  value
-
-template at*(mapValue: OrderedTable[Form, Form], index: int): Form =
-  mapValue[newIntForm(index)]
-
-template atOrErr*(mapValue: OrderedTable[Form, Form], index: int,
-                  name: string = "?" & $index,
-                  loc: LocationData = LocationData()): Form =
-  mapValue.getOrDefault(newIntForm(index),
-    loc.newErrForm(newSymForm(`ERR-UNBOUND-SYMBOL`),
-      "The symbol " & name & " has never been bound to any value"))
+variantWithLocation newMapForm, proc(posValueArg: seq[Form]): Form:
+  Form(kind: fkMap, posValue: posValueArg, mapValue: initOrderedTable[Form, Form]())
 
 variantWithLocation newSymForm, proc(symInternedArg: int): Form:
   Form(kind: fkSym, symInterned: symInternedArg)
@@ -262,8 +243,10 @@ proc toStr*(self: Form, data: InternmentData = newInternmentData()): string =
       ";ENVIROMENT"
     else:
       var parts: seq[string] = @[]
+      for form in self.posValue:
+        parts.add(form.toStr(data))
       for key, val in self.mapValue:
-        parts.add((if key.kind != fkInt: key.toStr(data) & ": " else: "") & val.toStr(data))
+        parts.add((key.toStr(data) & ": ") & val.toStr(data))
       if parts.len == 0: "()" else: "(" & parts.join(" ") & ")"
   of fkStr:
     "\"" & self.strValue & "\""
@@ -272,3 +255,45 @@ proc toStr*(self: Form, data: InternmentData = newInternmentData()): string =
     let filename = if loc.filename != nil: loc.filename[] else: "?"
     "err(" & self.errSym.toStr(data) & ", " & self.errMsg &
       " @" & filename & ":" & $loc.line & ":" & $loc.col & ")"
+
+template get*(map: Form, index: int): Form =
+  assert map.kind == fkMap, "get: not a map"
+  assert index >= 0 and index < map.posValue.len, "get: index out of range"
+  map.posValue[index]
+
+proc get*(map: Form, key: Form): Form =
+  assert map.kind == fkMap, "get: not a map"
+  if key.kind == fkInt and key.intValue >= 0 and key.intValue < map.posValue.len:
+    map.posValue[key.intValue]
+  else:
+    assert map.mapValue.hasKey(key), "get: key not found"
+    map.mapValue[key]
+
+proc append*(map: Form, value: Form) =
+  assert map.kind == fkMap, "append: not a map"
+  let key = newIntForm(map.posValue.len)
+  if map.mapValue.hasKey(key):
+    map.mapValue.del(key)
+  map.posValue.add(value)
+
+proc hasKey*(map: Form, index: int): bool =
+  assert map.kind == fkMap, "hasKey: not a map"
+  index >= 0 and index < map.posValue.len
+
+proc hasKey*(map: Form, key: Form): bool =
+  assert map.kind == fkMap, "hasKey: not a map"
+  if key.kind == fkInt and key.intValue >= 0 and key.intValue < map.posValue.len:
+    true
+  else:
+    map.mapValue.hasKey(key)
+
+proc put*(map: Form, key: Form, value: Form) =
+  assert map.kind == fkMap, "put: not a map"
+  if key.kind == fkInt and key.intValue >= 0 and key.intValue < map.posValue.len:
+    map.posValue[key.intValue] = value
+  else:
+    map.mapValue[key] = value
+
+proc len*(map: Form): int =
+  assert map.kind == fkMap, "len: not a map"
+  map.posValue.len + map.mapValue.len

@@ -60,7 +60,7 @@ proc setSym(ctx: Context, intern: int, val: Form, loc: LocationData): Form =
 
 proc eval*(ctx: Context, form: Form): Form 
 
-var builtinDispatcher = initTable[int, proc (ctx: Context, args: OrderedTable[Form, Form]): Form]()
+var builtinDispatcher = initTable[int, proc (ctx: Context, args: Form): Form]()
 var builtinBindings = newMapForm()
 
 macro builtin(name: int, body: untyped): untyped =
@@ -69,15 +69,19 @@ macro builtin(name: int, body: untyped): untyped =
   let evalBuiltin = ident("EVAL-BUILTIN")
 
   result.add quote do:
-    builtinDispatcher[`name`] = proc (ctx {.inject.}: Context, args {.inject.}: OrderedTable[Form, Form]): Form =
+    builtinDispatcher[`name`] = proc (ctx {.inject.}: Context, args {.inject.}: Form): Form =
       `body`
-    builtinBindings.mapValue[newSymForm(`name`)] = newMapForm( @{newIntForm(0): newSymForm(`evalBuiltin`)} )
+    builtinBindings.mapValue[newSymForm(`name`)] = newMapForm(@[newSymForm(`evalBuiltin`)])
 
 template arg(idx: int): Form =
-  args.atOrErr(idx + 1, loc = args.at(0).locationData)
+  if not args.hasKey(idx + 1):
+    args.get(0).locationData.newErrForm(newSymForm(`ERR-ARGS-MISMATCH`),
+      "Missing argument " & $idx)
+  else:
+    args.get(idx + 1)
 
 template argEval(idx: int): Form =
-  ctx.eval(args.atOrErr(idx + 1, loc = args.at(0).locationData))
+  ctx.eval(arg(idx))
 
 template expect(form: Form, ekind: FormKind): Form =
   if unlikely(form.kind != ekind):
@@ -88,13 +92,15 @@ template expect(form: Form, ekind: FormKind): Form =
 macro expect(opSym: untyped, rv: static[int]): untyped =
   let errArgsMismatch = ident("ERR-ARGS-MISMATCH")
 
-  let cond = nnkInfix.newTree(opSym, nnkCall.newTree(ident"len", ident"args"), newLit(rv + 1))
+  let cond = nnkInfix.newTree(opSym,
+    nnkCall.newTree(ident"len", nnkDotExpr.newTree(ident"args", ident"posValue")),
+    newLit(rv + 1))
 
   result = quote do:
     if not `cond`:
-      return args.at(0).locationData.newErrForm(newSymForm(`errArgsMismatch`),
+      return args.get(0).locationData.newErrForm(newSymForm(`errArgsMismatch`),
         "Arguments mismatch: expected len " & astToStr(`opSym`) & " " & $`rv` &
-        ", got " & $(args.len - 1))
+        ", got " & $(args.posValue.len - 1))
 
 macro returnIfErr(form: untyped): untyped =
   let tmp = genSym(nskLet, "form")
@@ -108,7 +114,7 @@ template argEvalInt(idx: int): int =
   argEval(idx).returnIfErr().expect(fkInt).returnIfErr().intValue
 
 template has(idx: static[int]): bool =
-  args.hasKey(newIntForm(idx + 1))
+  args.hasKey(idx + 1)
 
 builtin `EVAL+`:
   expect `==`, 2
@@ -183,7 +189,7 @@ builtin `EVAL-NEG`:
 builtin `EVAL-ALL`:
   expect `>=`, 1
   var last = newIntForm(1)
-  for i in 0 ..< args.len - 1:
+  for i in 0 ..< args.posValue.len - 1:
     last = argEval(i).returnIfErr()
     if not last.toBool():
       return newNilForm()
@@ -191,7 +197,7 @@ builtin `EVAL-ALL`:
 
 builtin `EVAL-ANY`:
   expect `>=`, 1
-  for i in 0 ..< args.len - 1:
+  for i in 0 ..< args.posValue.len - 1:
     let val = argEval(i).returnIfErr()
     if val.toBool():
       return val
@@ -221,8 +227,8 @@ builtin `EVAL-GET`:
   let map = argEval(0).returnIfErr().expect(fkMap).returnIfErr()
   let key = argEval(1).returnIfErr()
 
-  if map.mapValue.hasKey(key):
-    return map.mapValue[key]
+  if map.hasKey(key):
+    return map.get(key)
 
   if has(2):
     return argEval(2).returnIfErr()
@@ -257,14 +263,14 @@ builtin `EVAL-IF`:
 
 builtin `EVAL-COND`:
   expect `>=`, 1
-  for i in 0 ..< args.len - 1:
+  for i in 0 ..< args.posValue.len - 1:
     let rawPair = arg(i).returnIfErr()
     let pair = rawPair.expect(fkMap).returnIfErr()
-    if pair.mapValue.len != 2:
+    if pair.posValue.len != 2:
       return rawPair.locationData.newErrForm(newSymForm(`ERR-ARGS-MISMATCH`),
-        "COND: expected pair of 2, got " & $pair.mapValue.len)
-    let condForm = pair.mapValue.at(0)
-    let bodyForm = pair.mapValue.at(1)
+        "COND: expected pair of 2, got " & $pair.posValue.len)
+    let condForm = pair.get(0)
+    let bodyForm = pair.get(1)
     if ctx.eval(condForm).returnIfErr().toBool():
       return ctx.eval(bodyForm)
   return newNilForm()
@@ -277,18 +283,18 @@ builtin `EVAL-LET`:
   ctx.pushEnv()
 
   try:
-    for i in 0 ..< bindingsForm.mapValue.len:
-      let pair = bindingsForm.mapValue.at(i).expect(fkMap).returnIfErr()
-      if pair.mapValue.len != 2:
+    for i in 0 ..< bindingsForm.posValue.len:
+      let pair = bindingsForm.get(i).expect(fkMap).returnIfErr()
+      if pair.posValue.len != 2:
         return pair.locationData.newErrForm(newSymForm(`ERR-ARGS-MISMATCH`),
-          "LET: expected binding pair of 2, got " & $pair.mapValue.len)
-      let symForm = pair.mapValue.at(0).expect(fkSym).returnIfErr()
-      let value   = ctx.eval(pair.mapValue.at(1)).returnIfErr()
+          "LET: expected binding pair of 2, got " & $pair.posValue.len)
+      let symForm = pair.get(0).expect(fkSym).returnIfErr()
+      let value   = ctx.eval(pair.get(1)).returnIfErr()
       ctx.newSym(symForm.symInterned, value)
 
     var res = newNilForm()
-    for i in 2 ..< args.len:
-      res = ctx.eval(args.at(i)).returnIfErr()
+    for i in 2 ..< args.posValue.len:
+      res = ctx.eval(args.get(i)).returnIfErr()
     return res
   finally:
     ctx.popEnv()
@@ -298,8 +304,8 @@ builtin `EVAL-LAMBDA`:
 
   let paramsForm = arg(0).returnIfErr().expect(fkMap).returnIfErr()
   var params = newMapForm()
-  for i in 0 ..< paramsForm.mapValue.len:
-    let sym = paramsForm.mapValue.at(i).expect(fkSym).returnIfErr()
+  for i in 0 ..< paramsForm.posValue.len:
+    let sym = paramsForm.get(i).expect(fkSym).returnIfErr()
     let key = newSymForm(sym.symInterned)
     if params.mapValue.hasKey(key):
       return sym.locationData.newErrForm(newSymForm(`ERR-DUPLICATE-PARAM`),
@@ -307,15 +313,15 @@ builtin `EVAL-LAMBDA`:
     params.mapValue[key] = newSymForm(`EVAL-PARAM`)
 
   var body = newMapForm()
-  for i in 2 ..< args.len:
-    body.mapValue.append(args.at(i))
+  for i in 2 ..< args.posValue.len:
+    body.append(args.get(i))
 
-  return newMapForm(@{
-    newIntForm(0): newSymForm(`EVAL-T-LAMBDA`),
-    newIntForm(1): params,
-    newIntForm(2): ctx.env,
-    newIntForm(3): body
-  })
+  return newMapForm(@[
+    newSymForm(`EVAL-T-LAMBDA`),
+    params,
+    ctx.env,
+    body
+  ])
 
 builtin `EVAL-TRY`:
   expect `>=`, 2
@@ -331,12 +337,12 @@ builtin `EVAL-TRY`:
   try:
     let bodyRes = ctx.eval(bodyForm)
     if bodyRes.kind == fkErr:
-      let callForm = newMapForm(@{
-        newIntForm(0): handlerForm,
-        newIntForm(1): newMapForm(@{newIntForm(0): newSymForm(`PARSER-QUOTE`), newIntForm(1): bodyRes.errSym}),
-        newIntForm(2): newStrForm(bodyRes.errMsg),
-        newIntForm(3): newMapForm(@{newIntForm(0): newSymForm(`PARSER-QUOTE`), newIntForm(1): bodyRes.errTrace})
-      })
+      let callForm = newMapForm(@[
+        handlerForm,
+        newMapForm(@[newSymForm(`PARSER-QUOTE`), bodyRes.errSym]),
+        newStrForm(bodyRes.errMsg),
+        newMapForm(@[newSymForm(`PARSER-QUOTE`), bodyRes.errTrace])
+      ])
       res = ctx.eval(callForm)
     else:
       res = bodyRes
@@ -362,18 +368,18 @@ proc newContext*(internmentData: InternmentData = newInternmentData()): Context 
   )
 
 proc funcall(ctx: Context, closure: Form, callForm: Form): Form =
-  let params = closure.mapValue.at(1)
-  let env    = closure.mapValue.at(2)
-  let body   = closure.mapValue.at(3)
+  let params = closure.get(1)
+  let env    = closure.get(2)
+  let body   = closure.get(3)
 
-  let argc = callForm.mapValue.len - 1
+  let argc = callForm.posValue.len - 1
   if argc != params.mapValue.len:
     return callForm.locationData.newErrForm(newSymForm(`ERR-ARGS-MISMATCH`),
       "Arguments mismatch: expected " & $params.mapValue.len & ", got " & $argc)
 
   var argValues = newSeq[Form](argc)
   for i in 0 ..< argc:
-    argValues[i] = ctx.eval(callForm.mapValue.at(i + 1)).returnIfErr()
+    argValues[i] = ctx.eval(callForm.get(i + 1)).returnIfErr()
 
   let oldEnv = ctx.env
   ctx.env = env
@@ -386,8 +392,8 @@ proc funcall(ctx: Context, closure: Form, callForm: Form): Form =
       inc pi
 
     var res = newNilForm()
-    for i in 0 ..< body.mapValue.len:
-      res = ctx.eval(body.mapValue.at(i)).returnIfErr()
+    for i in 0 ..< body.posValue.len:
+      res = ctx.eval(body.get(i)).returnIfErr()
     return res
   finally:
     ctx.popEnv()
@@ -402,35 +408,36 @@ proc eval*(ctx: Context, form: Form): Form =
     return form
 
   # form.kind == fkMap
-  if form.mapValue.len == 0:
+  if form.posValue.len == 0:
     return form
 
-  let headKey = newIntForm(0)
-  if not form.mapValue.hasKey(headKey):
-    return form.locationData.newErrForm(newSymForm(`ERR-CANNOT-CALL`),
-      "Cannot call " & form.toStr(ctx.internmentData))
-
-  let head = form.mapValue[headKey]
+  let head = form.get(0)
   if head.kind == fkSym and head.symInterned == `PARSER-KEYWORD`:
     return form
 
   let callForm = ctx.eval(head).returnIfErr()
 
-  if callForm.kind != fkMap or not callForm.mapValue.hasKey(headKey) or
-      callForm.mapValue[headKey].kind != fkSym:
-    return head.locationData.newErrForm(newSymForm(`ERR-CANNOT-CALL`), "Cannot call " &
-      (if callForm.kind != fkMap: $head.kind
-       else: $callForm.mapValue[headKey].kind))
+  if callForm.kind != fkMap or callForm.posValue.len == 0:
+    return head.locationData.newErrForm(newSymForm(`ERR-CANNOT-CALL`),
+      "Cannot call " & $head.kind)
 
-  let ty = callForm.mapValue[headKey].symInterned
-  let caused = form.mapValue[headKey]
+  let callHead = callForm.get(0)
+  if callHead.kind != fkSym:
+    return head.locationData.newErrForm(newSymForm(`ERR-CANNOT-CALL`),
+      "Cannot call " & $callHead.kind)
+
+  let ty = callHead.symInterned
 
   if ty == `EVAL-BUILTIN`:
-    result = builtinDispatcher[caused.symInterned](ctx, form.mapValue)
+    result = builtinDispatcher[head.symInterned](ctx, form)
     if result.kind == fkErr:
-      result.errTrace.mapValue.append(caused)
+      result.errTrace.append(head)
 
   elif ty == `EVAL-T-LAMBDA`:
     result = funcall(ctx, callForm, form)
     if result.kind == fkErr:
-      result.errTrace.mapValue.append(caused.locationData.newSymForm(`EVAL-T-LAMBDA`))
+      result.errTrace.append(head.locationData.newSymForm(`EVAL-T-LAMBDA`))
+
+  else:
+    return head.locationData.newErrForm(newSymForm(`ERR-CANNOT-CALL`),
+      "Unknown callable: " & ctx.internmentData.unintern(ty))

@@ -117,17 +117,17 @@ proc skipWhitespaces(self: Parser) =
 
 proc isKeywordPair(form: Form): bool =
   if form.kind != fkMap: return false
-  if not form.mapValue.hasKey(newIntForm(0)): return false
-  if not form.mapValue.hasKey(newIntForm(1)): return false
-  if form.mapValue.len != 2: return false
+  if not form.hasKey(0): return false
+  if not form.hasKey(1): return false
+  if form.posValue.len != 2: return false
 
-  let head = form.mapValue.at(0)
+  let head = form.get(0)
   if head.kind != fkMap: return false
-  if not head.mapValue.hasKey(newIntForm(0)): return false
-  if not head.mapValue.hasKey(newIntForm(1)): return false
-  if head.mapValue.len != 2: return false
+  if not head.hasKey(0): return false
+  if not head.hasKey(1): return false
+  if head.posValue.len != 2: return false
 
-  let headSym = head.mapValue.at(0)
+  let headSym = head.get(0)
   headSym.kind == fkSym and headSym.symInterned == `PARSER-KEYWORD`
 
 template parseMap(self: Parser, locationDataArg: LocationData): Form =
@@ -140,9 +140,9 @@ template parseMap(self: Parser, locationDataArg: LocationData): Form =
       break
 
     if form.isKeywordPair():
-      temp.mapValue[form.mapValue.at(0).mapValue.at(1)] = form.mapValue.at(1)
+      temp.put(form.get(0).get(1), form.get(1))
     else:
-      temp.mapValue.append(form)
+      temp.append(form)
 
   self.skipWhitespaces()
 
@@ -157,24 +157,24 @@ template parseMap(self: Parser, locationDataArg: LocationData): Form =
 
 template parseQuote(self: Parser, locationData: LocationData): Form =
   let temp = locationData.newMapForm()
-  temp.mapValue.append(locationData.newSymForm(`PARSER-QUOTE`))
+  temp.append(locationData.newSymForm(`PARSER-QUOTE`))
 
   let form = self.parseForm()
   if form.isNil():
     raise locationData.newParserError("Expected form after '\\''")
 
-  temp.mapValue.append(form)
+  temp.append(form)
   temp
 
 template parseKeyword(self: Parser, locationData: LocationData): Form =
   let temp = locationData.newMapForm()
-  temp.mapValue.append(locationData.newSymForm(`PARSER-KEYWORD`))
+  temp.append(locationData.newSymForm(`PARSER-KEYWORD`))
 
   let form = self.parseForm()
   if form.isNil():
     raise locationData.newParserError("Expected form after ':'")
 
-  temp.mapValue.append(form)
+  temp.append(form)
   temp
 
 proc parseForm(self: Parser): Form =
@@ -215,7 +215,7 @@ proc parse(self: Parser, loc: LocationData = self.locationData): Form =
   while self.peek() notin "\0":
     let form = self.parseForm()
     if form.isNil(): break
-    result.mapValue.append(form)
+    result.append(form)
 
   if self.peek() == ')':
     raise self.locationData.newParserError("Unmatched ')'")

@@ -25,7 +25,7 @@ proc repl(ctx: Context, internmentData: InternmentData) =
       stderr.writeLine("Error: " & code.errMsg)
       continue
 
-    for form in code.mapValue.values:
+    for form in code.posValue:
       res = ctx.eval(form)
 
     if res.isNil():
@@ -55,7 +55,7 @@ proc runFile(filename: string) =
 
   let ctx = newContext(internmentData)
 
-  for form in code.mapValue.values:
+  for form in code.posValue:
     discard ctx.eval(form)
 
 proc main() =
