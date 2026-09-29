@@ -117,28 +117,47 @@ template has(idx: static[int]): bool =
   args.hasKey(idx + 1)
 
 builtin `EVAL+`:
-  expect `==`, 2
-  return newIntForm(argEvalInt(0) + argEvalInt(1))
+  expect `>=`, 0
+  var res = 0
+  for form in args.posValue[1 .. ^1]:
+    res += ctx.eval(form).returnIfErr().expect(fkInt).returnIfErr().intValue
+  return newIntForm(res)
 
 builtin `EVAL-`:
-  expect `==`, 2
-  return newIntForm(argEvalInt(0) - argEvalInt(1))
+  expect `>=`, 1
+  var res = ctx.eval(args.posValue[1]).returnIfErr().expect(fkInt).returnIfErr().intValue
+  if args.posValue.len == 2:
+    return newIntForm(-res)
+  for form in args.posValue[2 .. ^1]:
+    res -= ctx.eval(form).returnIfErr().expect(fkInt).returnIfErr().intValue
+  return newIntForm(res)
 
 builtin `EVAL*`:
-  expect `==`, 2
-  return newIntForm(argEvalInt(0) * argEvalInt(1))
+  expect `>=`, 0
+  var res = 1
+  for form in args.posValue[1 .. ^1]:
+    res *= ctx.eval(form).returnIfErr().expect(fkInt).returnIfErr().intValue
+  return newIntForm(res)
 
 builtin `EVAL-DIV`:
-  expect `==`, 2
-  let b = argEvalInt(1)
-  if b == 0: return arg(1).locationData.newErrForm(newSymForm(`ERR-ZERO-DIVISION`))
-  return newIntForm(argEvalInt(0) div b)
+  expect `>=`, 1
+  var res = ctx.eval(args.posValue[1]).returnIfErr().expect(fkInt).returnIfErr().intValue
+  for i in 2 ..< args.posValue.len:
+    let b = ctx.eval(args.posValue[i]).returnIfErr().expect(fkInt).returnIfErr().intValue
+    if b == 0:
+      return args.posValue[i].locationData.newErrForm(newSymForm(`ERR-ZERO-DIVISION`))
+    res = res div b
+  return newIntForm(res)
 
 builtin `EVAL-MOD`:
-  expect `==`, 2
-  let b = argEvalInt(1)
-  if b == 0: return arg(1).locationData.newErrForm(newSymForm(`ERR-ZERO-DIVISION`))
-  return newIntForm(argEvalInt(0) mod b)
+  expect `>=`, 1
+  var res = ctx.eval(args.posValue[1]).returnIfErr().expect(fkInt).returnIfErr().intValue
+  for i in 2 ..< args.posValue.len:
+    let b = ctx.eval(args.posValue[i]).returnIfErr().expect(fkInt).returnIfErr().intValue
+    if b == 0:
+      return args.posValue[i].locationData.newErrForm(newSymForm(`ERR-ZERO-DIVISION`))
+    res = res mod b
+  return newIntForm(res)
 
 builtin `EVAL-EQ`:
   expect `==`, 2
@@ -182,23 +201,19 @@ builtin `EVAL<=`:
   else:
     return newNilForm()
 
-builtin `EVAL-NEG`:
-  expect `==`, 1
-  return newIntForm(-argEvalInt(0))
-
 builtin `EVAL-ALL`:
   expect `>=`, 1
   var last = newIntForm(1)
-  for i in 0 ..< args.posValue.len - 1:
-    last = argEval(i).returnIfErr()
+  for form in args.posValue[1..^1]:
+    last = ctx.eval(form).returnIfErr()
     if not last.toBool():
       return newNilForm()
   return last
 
 builtin `EVAL-ANY`:
   expect `>=`, 1
-  for i in 0 ..< args.posValue.len - 1:
-    let val = argEval(i).returnIfErr()
+  for form in args.posValue[1..^1]:
+    let val = ctx.eval(form).returnIfErr()
     if val.toBool():
       return val
   return newNilForm()
@@ -299,22 +314,28 @@ builtin `EVAL-LET`:
   finally:
     ctx.popEnv()
 
+template argsBodyImpl(args: Form, paramsForm: Form, bodyStart: int,
+                      paramsOut, bodyOut: untyped) =
+  paramsOut = newMapForm()
+  for i in 0 ..< paramsForm.posValue.len:
+    let sym = paramsForm.get(i).expect(fkSym).returnIfErr()
+    let key = newSymForm(sym.symInterned)
+    if paramsOut.mapValue.hasKey(key):
+      return sym.locationData.newErrForm(newSymForm(`ERR-DUPLICATE-PARAM`),
+        "Duplicate parameter: " & ctx.internmentData.unintern(sym.symInterned))
+    paramsOut.mapValue[key] = newSymForm(`EVAL-PARAM`)
+
+  bodyOut = newMapForm()
+  for i in bodyStart ..< args.posValue.len:
+    bodyOut.append(args.get(i))
+
 builtin `EVAL-LAMBDA`:
   expect `>=`, 1
 
   let paramsForm = arg(0).returnIfErr().expect(fkMap).returnIfErr()
-  var params = newMapForm()
-  for i in 0 ..< paramsForm.posValue.len:
-    let sym = paramsForm.get(i).expect(fkSym).returnIfErr()
-    let key = newSymForm(sym.symInterned)
-    if params.mapValue.hasKey(key):
-      return sym.locationData.newErrForm(newSymForm(`ERR-DUPLICATE-PARAM`),
-        "Duplicate parameter: " & ctx.internmentData.unintern(sym.symInterned))
-    params.mapValue[key] = newSymForm(`EVAL-PARAM`)
 
-  var body = newMapForm()
-  for i in 2 ..< args.posValue.len:
-    body.append(args.get(i))
+  var params, body: Form
+  argsBodyImpl(args, paramsForm, 2, params, body)
 
   return newMapForm(@[
     newSymForm(`EVAL-T-LAMBDA`),
@@ -322,6 +343,31 @@ builtin `EVAL-LAMBDA`:
     ctx.env,
     body
   ])
+
+builtin `EVAL-DEFUN`:
+  expect `>=`, 2
+
+  let nameForm   = arg(0).returnIfErr().expect(fkSym).returnIfErr()
+  let paramsForm = arg(1).returnIfErr().expect(fkMap).returnIfErr()
+
+  var params, body: Form
+  argsBodyImpl(args, paramsForm, 3, params, body)
+
+  let closure = newMapForm(@[
+    newSymForm(`EVAL-T-LAMBDA`),
+    params,
+    ctx.env,
+    body
+  ])
+
+  let `func` = newMapForm(@[
+    newSymForm(`EVAL-FUNC`),
+    nameForm,
+    closure
+  ])
+
+  ctx.newSym(nameForm.symInterned, `func`)
+  return nameForm
 
 builtin `EVAL-TRY`:
   expect `>=`, 2
@@ -353,6 +399,56 @@ builtin `EVAL-TRY`:
         res = finRes
 
   return res
+
+proc display(form: Form, data: InternmentData): string =
+  if form.kind == fkStr: form.strValue
+  else: form.toStr(data)
+
+builtin `EVAL-ECHO`:
+  expect `>=`, 1
+
+  var s = ""
+  for i in 0 ..< args.posValue.len - 1:
+    s &= argEval(i).returnIfErr().display(ctx.internmentData)
+
+  stdout.writeLine(s)
+  return newNilForm()
+
+builtin `EVAL-LEN`:
+  expect `==`, 1
+  let form = argEval(0).returnIfErr()
+  case form.kind
+  of fkMap: return newIntForm(form.posValue.len + form.mapValue.len)
+  of fkStr: return newIntForm(form.strValue.len)
+  else:
+    return form.locationData.newErrForm(newSymForm(`ERR-TYPE-MISMATCH`),
+      "LEN: expected map or string, got " & $form.kind)
+
+builtin `EVAL-EVAL`:
+  expect `==`, 1
+  return ctx.eval(argEval(0))
+
+builtin `EVAL-BUILD`:
+  expect `>=`, 0
+
+  var m = newMapForm()
+  for i in 1 ..< args.posValue.len:
+    m.append(ctx.eval(args.posValue[i]).returnIfErr())
+  for k, v in args.mapValue.pairs:
+    m.put(k, ctx.eval(v).returnIfErr())
+  return m
+
+builtin `EVAL-APPLY`:
+  expect `==`, 2
+  let funcForm = arg(0).returnIfErr()
+  let argsList = argEval(1).returnIfErr().expect(fkMap).returnIfErr()
+
+  var callForm = funcForm.locationData.newMapForm()
+  callForm.append(funcForm)
+  for i in 0 ..< argsList.posValue.len:
+    callForm.append(argsList.posValue[i])
+
+  return ctx.eval(callForm)
 
 proc newContext*(internmentData: InternmentData = newInternmentData()): Context =
   var env = newMapForm()
@@ -437,6 +533,13 @@ proc eval*(ctx: Context, form: Form): Form =
     result = funcall(ctx, callForm, form)
     if result.kind == fkErr:
       result.errTrace.append(head.locationData.newSymForm(`EVAL-T-LAMBDA`))
+
+  elif ty == `EVAL-FUNC`:
+    let funcName = callForm.get(1)
+    let closure  = callForm.get(2)
+    result = funcall(ctx, closure, form)
+    if result.kind == fkErr:
+      result.errTrace.append(head.locationData.newSymForm(funcName.symInterned))
 
   else:
     return head.locationData.newErrForm(newSymForm(`ERR-CANNOT-CALL`),

@@ -28,7 +28,7 @@ proc repl(ctx: Context, internmentData: InternmentData) =
     for form in code.posValue:
       res = ctx.eval(form)
 
-    if res.isNil():
+    if res.isNil() or res.kind == fkNil:
       continue
 
     if res.kind == fkErr:
