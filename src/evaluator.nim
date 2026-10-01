@@ -473,6 +473,13 @@ builtin `EVAL-BECOME`:
     marker.append(argEval(i).returnIfErr())
   return marker
 
+builtin `EVAL-DO`:
+  expect `>=`, 0
+  var res = newNilForm()
+  for i in 1 ..< args.posValue.len:
+    res = ctx.eval(args.get(i)).returnIfErr()
+  return res
+
 proc newContext*(internmentData: InternmentData = newInternmentData()): Context =
   var env = newMapForm()
   for k, v in builtinBindings.mapValue.pairs:

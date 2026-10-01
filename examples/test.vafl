@@ -1,3 +1,5 @@
-(defun a (x) (become b x))
-(defun b (x) (+ x "not-int"))
-(a 5)
+(defun fact (n)
+  (if (eq n 0) 1
+  	(* n (fact (- n 1)))))
+
+(echo "fact 5 = " (fact 5))

@@ -1,5 +1,5 @@
 import std/[os, parseopt, tables, rdstdin]
-import parser, forms, evaluator
+import parser, forms, evaluator, transpiler
 
 proc printEnv(ctx: Context, internmentData: InternmentData) =
   let frame = ctx.env.get(newSymForm(`ENV-CURRENT`))
@@ -52,6 +52,16 @@ proc repl(ctx: Context, internmentData: InternmentData) =
 
     echo res.toStr(ctx.internmentData)
 
+proc compileFile(input, output: string) =
+  let content = readFile(input)
+  let internmentData = newInternmentData()
+  let form = content.parse(input, internmentData)
+  if form.kind == fkErr:
+    stderr.writeLine("Error: " & form.errMsg)
+    return
+  let code = transpile(form, internmentData)
+  writeFile(output, code)
+
 proc runFile(filename: string) =
   if not fileExists(filename):
     echo "Error: file not found - ", filename
@@ -80,24 +90,33 @@ proc runFile(filename: string) =
         echo "Error: " & res.errMsg
 
 proc main() =
-  var filename: string
+  var inputFile: string
+  var outputFile: string
+  var compileMode: bool
 
   for kind, key, val in getopt():
     case kind
     of cmdLongOption, cmdShortOption:
       case key
-      # of "locale", "l": locale = val
+      of "compile", "c": compileMode = true
       else: discard
     of cmdArgument:
-      if filename == "": filename = key
+      if inputFile == "": inputFile = key
+      elif outputFile == "": outputFile = key
     of cmdEnd: discard
 
-  if filename == "":
+  if inputFile == "":
+    if compileMode:
+      stderr.write "Warning: TODO message"
     let internmentData = newInternmentData()
     let ctx = newContext(internmentData)
     repl(ctx, internmentData)
+  elif compileMode:
+    if outputFile == "":
+      outputFile = changeFileExt(inputFile, "nim")
+    compileFile(inputFile, outputFile)  # TODO: lshl -c calculates the relative path from outputFile to src/sysvafly via relativePath.
   else:
-    runFile(filename)
+    runFile(inputFile)
 
 when isMainModule:
   main()

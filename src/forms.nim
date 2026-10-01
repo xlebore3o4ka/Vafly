@@ -162,6 +162,7 @@ let `EVAL-EVAL`*      = requiredInterns.intern("EVAL")
 let `EVAL-BUILD`*     = requiredInterns.intern("BUILD")
 let `EVAL-APPLY`*     = requiredInterns.intern("APPLY")
 let `EVAL-BECOME`*    = requiredInterns.intern("BECOME")
+let `EVAL-DO`*        = requiredInterns.intern("DO")
 
 let `ERR-PARSER-ERROR`*    = requiredInterns.intern("ERR-PARSER-ERROR!")
 let `ERR-UNBOUND-SYMBOL`*  = requiredInterns.intern("ERR-UNBOUND-SYMBOL!")
@@ -221,6 +222,9 @@ variantWithLocation newMapForm, proc(mapValueArg: seq[(Form, Form)]): Form:
 
 variantWithLocation newMapForm, proc(posValueArg: seq[Form]): Form:
   Form(kind: fkMap, posValue: posValueArg, mapValue: initOrderedTable[Form, Form]())
+
+variantWithLocation newMapForm, proc(posValueArg: seq[Form], mapValueArg: seq[(Form, Form)]): Form:
+  Form(kind: fkMap, posValue: posValueArg, mapValue: mapValueArg)
 
 variantWithLocation newSymForm, proc(symInternedArg: int): Form:
   Form(kind: fkSym, symInterned: symInternedArg)
