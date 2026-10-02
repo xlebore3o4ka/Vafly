@@ -12,30 +12,6 @@ type
     locCounter: int
     fileCounter: int
 
-let expandableBuiltins*: Table[int, tuple[name: string, min, max: int]] = {
-  `EVAL+`: ("OPT+",    0, -1),
-  `EVAL-`: ("OPT-",    1, -1),
-  `EVAL*`: ("OPT*",    0, -1),
-  `EVAL-DIV`: ("OPT-DIV", 1, -1),
-  `EVAL-MOD`: ("OPT-MOD", 1, -1),
-}.toTable
-
-let noOptBuiltins*: seq[int] = @[
-  `PARSER-QUOTE`,
-  `EVAL-LAMBDA`,
-  `EVAL-DEFUN`,
-  `EVAL-TRY`,
-  `EVAL-IF`,
-  `EVAL-COND`,
-  `EVAL-AND`,
-  `EVAL-OR`,
-  `EVAL-ALL`,
-  `EVAL-ANY`,
-  `EVAL-LET`,
-  `EVAL-BUILD`,
-  `EVAL-DO`,
-]
-
 proc fileName(t: Transpiler, name: string): string =
   if t.files.hasKey(name):
     return t.files[name]
@@ -60,66 +36,31 @@ proc locationName(t: Transpiler, loc: LocationData): string =
   t.defs.add("let " & result & " = loc(" & t.fileName(loc.filename[]) & ", " &
              $loc.line & ", " & $loc.col & ")")
 
-proc transpileForm(t: Transpiler, form: Form, noOpt: bool = false): string
+proc transpileForm(t: Transpiler, form: Form): string
 
 template loc(t: Transpiler, form: Form): string =
   " ? " & t.locationName(form.locationData)
 
-proc transpileMap(t: Transpiler, form: Form, noOpt: bool = false): string =
+proc transpileMap(t: Transpiler, form: Form): string =
   var pos: seq[string] = @[]
   for f in form.posValue:
-    pos.add(t.transpileForm(f, noOpt))
+    pos.add(t.transpileForm(f))
 
   if form.mapValue.len == 0:
     return "M(" & pos.join(", ") & ")" & t.loc(form)
 
   var pairs: seq[string] = @[]
   for k, v in form.mapValue.pairs:
-    pairs.add("(" & t.transpileForm(k, noOpt) & ", " & t.transpileForm(v, noOpt) & ")")
+    pairs.add("(" & t.transpileForm(k) & ", " & t.transpileForm(v) & ")")
 
   return "K(@[" & pos.join(", ") & "], @[" & pairs.join(", ") & "])" & t.loc(form)
 
-proc transpileBuiltin(t: Transpiler, form: Form, macroName: string): string =
-  let head = form.posValue[0]
-  var args: seq[string] = @[]
-
-  args.add(t.locationName(head.locationData))
-
-  for i in 1 ..< form.posValue.len:
-    args.add(t.transpileForm(form.posValue[i]))
-
-  return "`" & macroName & "`(" & args.join(", ") & ")"
-
-proc dispatchMapTranspilation(t: Transpiler, form: Form, noOpt: bool = false): string =
-  if form.posValue.len == 0 and form.mapValue.len == 0:
-    return "M()" & t.loc(form)
-
-  if noOpt or form.posValue.len == 0:
-    return t.transpileMap(form, noOpt)
-  else:
-    let head = form.posValue[0]
-    if head.kind != fkSym:
-      return t.transpileMap(form)
-
-    let headIntern = head.symInterned
-
-    if headIntern in noOptBuiltins:
-      return t.transpileMap(form, true)
-
-    if expandableBuiltins.hasKey(headIntern):
-      let argc = form.posValue.len - 1
-      let info = expandableBuiltins[headIntern]
-      if argc >= info.min and (info.max < 0 or argc <= info.max):
-        return t.transpileBuiltin(form, info.name)
-
-    return t.transpileMap(form)
-
-proc transpileForm(t: Transpiler, form: Form, noOpt: bool = false): string =
+proc transpileForm(t: Transpiler, form: Form): string =
   result = case form.kind:
   of fkInt: "%" & $form.intValue & t.loc(form)
   of fkStr: "%" & form.strValue.escape() & t.loc(form)
   of fkSym: "^" & t.internmentData.unintern(form.symInterned).escape() & t.loc(form)
-  of fkMap: t.dispatchMapTranspilation(form, noOpt)
+  of fkMap: t.transpileMap(form)
   of fkNil: "%nil" & t.loc(form)
   of fkErr: raise newException(ValueError, "unexpected fkErr at " & $form.locationData)
 
