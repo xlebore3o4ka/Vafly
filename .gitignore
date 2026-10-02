@@ -6,3 +6,4 @@ gitchanges.txt
 bin/lshl
 src/compiler.nim.deprecated
 all_files.txt
+transpiled/test

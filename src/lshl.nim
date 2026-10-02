@@ -10,6 +10,12 @@ proc printEnv(ctx: Context, internmentData: InternmentData) =
     let name = internmentData.unintern(key.symInterned)
     stdout.writeLine(name & " = " & val.toStr(internmentData))
 
+proc printErr(err: Form, sources: Table[string, string], data: InternmentData) =
+  if err.locationData.filename != nil and sources.hasKey(err.locationData.filename[]):
+    stderr.writeLine sources[err.locationData.filename[]].errFormToStr(err, data)
+  else:
+    stderr.writeLine "Error: " & err.errMsg
+
 proc repl(ctx: Context, internmentData: InternmentData) =
   echo ":quit / :q to exit ; :env to show environment"
   var counter = 0
@@ -33,10 +39,6 @@ proc repl(ctx: Context, internmentData: InternmentData) =
     let code = line.parse(filename, internmentData)
     var res: Form
 
-    if code.kind == fkErr:
-      stderr.writeLine("Error: " & code.errMsg)
-      continue
-
     for form in code.posValue:
       res = ctx.eval(form)
 
@@ -44,22 +46,19 @@ proc repl(ctx: Context, internmentData: InternmentData) =
       continue
 
     if res.kind == fkErr:
-      let loc = res.locationData
-      if loc.filename != nil and sources.hasKey(loc.filename[]):
-        echo sources[loc.filename[]].errFormToStr(res, internmentData)
-      else:
-        echo "Error: " & res.errMsg
-
-    echo res.toStr(ctx.internmentData)
+      printErr(res, sources, internmentData)
+    else:
+      echo res.toStr(ctx.internmentData)
 
 proc compileFile(input, output: string) =
   let content = readFile(input)
   let internmentData = newInternmentData()
   let form = content.parse(input, internmentData)
-  if form.kind == fkErr:
-    stderr.writeLine("Error: " & form.errMsg)
-    return
-  let code = transpile(form, internmentData)
+
+  var sources = initTable[string, string]()
+  sources[input] = content
+
+  let code = transpile(form, internmentData, sources)
   writeFile(output, code)
 
 proc runFile(filename: string) =
@@ -74,20 +73,13 @@ proc runFile(filename: string) =
 
   let code = content.parse(filename, internmentData)
 
-  if code.kind == fkErr:
-    stderr.writeLine("Error: " & code.errMsg)
-    return
-
   let ctx = newContext(internmentData)
 
   for form in code.posValue:
     let res = ctx.eval(form)
     if res.kind == fkErr:
-      let loc = res.locationData
-      if loc.filename != nil and sources.hasKey(loc.filename[]):
-        echo sources[loc.filename[]].errFormToStr(res, internmentData)
-      else:
-        echo "Error: " & res.errMsg
+      printErr(res, sources, internmentData)
+      quit(1)
 
 proc main() =
   var inputFile: string
@@ -107,7 +99,7 @@ proc main() =
 
   if inputFile == "":
     if compileMode:
-      stderr.write "Warning: TODO message"
+      stderr.writeLine("Warning: no input file specified (usage: lshl -c <file.vafl> [-o <output.nim>])\nEntering the REPL")
     let internmentData = newInternmentData()
     let ctx = newContext(internmentData)
     repl(ctx, internmentData)

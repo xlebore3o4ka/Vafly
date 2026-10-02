@@ -224,7 +224,7 @@ variantWithLocation newMapForm, proc(posValueArg: seq[Form]): Form:
   Form(kind: fkMap, posValue: posValueArg, mapValue: initOrderedTable[Form, Form]())
 
 variantWithLocation newMapForm, proc(posValueArg: seq[Form], mapValueArg: seq[(Form, Form)]): Form:
-  Form(kind: fkMap, posValue: posValueArg, mapValue: mapValueArg)
+  Form(kind: fkMap, posValue: posValueArg, mapValue: mapValueArg.toOrderedTable)
 
 variantWithLocation newSymForm, proc(symInternedArg: int): Form:
   Form(kind: fkSym, symInterned: symInternedArg)

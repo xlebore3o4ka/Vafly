@@ -1,5 +1,1 @@
-(defun fact (n)
-  (if (eq n 0) 1
-  	(* n (fact (- n 1)))))
-
-(echo "fact 5 = " (fact 5))
+(echo (+ (+ 1 2) (* (+ 4 5) 3) (div 24 5)))
