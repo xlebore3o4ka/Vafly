@@ -336,14 +336,15 @@ builtin `EVAL-LAMBDA`:
 
   var params, body: Form
   argsBodyImpl(args, paramsForm, 2, params, body)
+  let loc = args.get(0).locationData
 
-  return newMapForm(@[
+  return loc.newMapForm(@[
     newSymForm(`EVAL-T-LAMBDA`),
     params,
     ctx.env,
     body
   ])
-
+  
 builtin `EVAL-DEFUN`:
   expect `>=`, 2
 
@@ -480,6 +481,80 @@ builtin `EVAL-DO`:
     res = ctx.eval(args.get(i)).returnIfErr()
   return res
 
+builtin `EVAL-HAS`:
+  expect `==`, 2
+  let map = argEval(0).returnIfErr().expect(fkMap).returnIfErr()
+  let key = argEval(1).returnIfErr()
+  if map.hasKey(key):
+    return newIntForm(1)
+  return newNilForm()
+
+builtin `EVAL-PUT`:
+  expect `==`, 3
+  let map = argEval(0).returnIfErr().expect(fkMap).returnIfErr()
+  let key = argEval(1).returnIfErr()
+  let val = argEval(2).returnIfErr()
+  map.put(key, val)
+  return map
+
+builtin `EVAL-APPEND`:
+  expect `==`, 2
+  let map = argEval(0).returnIfErr().expect(fkMap).returnIfErr()
+  let val = argEval(1).returnIfErr()
+  map.append(val)
+  return map
+
+builtin `EVAL-IN`:
+  expect `==`, 2
+  let map = argEval(0).returnIfErr().expect(fkMap).returnIfErr()
+  let val = argEval(1).returnIfErr()
+
+  for v in map.posValue:
+    if v == val: return newIntForm(1)
+  for _, v in map.mapValue.pairs:
+    if v == val: return newIntForm(1)
+  return newNilForm()
+
+builtin `EVAL-WHILE`:
+  expect `>=`, 1
+  let condForm = arg(0)
+  while true:
+    let c = ctx.eval(condForm).returnIfErr()
+    if not c.toBool(): break
+    for i in 1 ..< args.posValue.len:
+      let r = ctx.eval(args.get(i))
+      if r.kind == fkErr: return r
+  return newNilForm()
+
+builtin `EVAL-MAP`:
+  expect `==`, 2
+  let fn = argEval(0).returnIfErr()
+  let coll = argEval(1).returnIfErr().expect(fkMap).returnIfErr()
+  var res = newMapForm()
+  for v in coll.posValue:
+    res.append(ctx.eval(v.locationData.newMapForm(@[fn, v])).returnIfErr())
+  return res
+
+builtin `EVAL-FILTER`:
+  expect `==`, 2
+  let fn = argEval(0).returnIfErr()
+  let coll = argEval(1).returnIfErr().expect(fkMap).returnIfErr()
+  var res = newMapForm()
+  for v in coll.posValue:
+    if ctx.eval(v.locationData.newMapForm(@[fn, v])).returnIfErr().toBool():
+      res.append(v)
+  return res
+
+builtin `EVAL-REDUCE`:
+  expect `==`, 3
+  let fn = argEval(0).returnIfErr()
+  let acc0 = argEval(1).returnIfErr()
+  let coll = argEval(2).returnIfErr().expect(fkMap).returnIfErr()
+  var acc = acc0
+  for v in coll.posValue:
+    acc = ctx.eval(v.locationData.newMapForm(@[fn, acc, v])).returnIfErr()
+  return acc
+
 proc newContext*(internmentData: InternmentData = newInternmentData()): Context =
   var env = newMapForm()
   for k, v in builtinBindings.mapValue.pairs:
@@ -572,7 +647,7 @@ proc eval*(ctx: Context, form: Form): Form =
     return form
 
   let head = form.get(0)
-  if head.kind == fkSym and head.symInterned == `PARSER-KEYWORD`:
+  if head.kind == fkSym and head.symInterned in [`PARSER-KEYWORD`, `EVAL-T-LAMBDA`, `EVAL-FUNC`]:
     return form
 
   let callForm = ctx.eval(head).returnIfErr()

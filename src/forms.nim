@@ -97,6 +97,11 @@ proc intern*(data: InternmentData, original: string): int =
 template unintern*(data: InternmentData, intern: int): string =
   data.interning[intern]
 
+proc locStrOf(name: Form): string =
+  let loc = name.locationData
+  let locFile = if loc.filename != nil: loc.filename[] else: "?"
+  fmt"{locFile}({loc.line}:{loc.col})"
+
 proc errFormToStr*(text: string, err: Form, data: InternmentData): string =
   let filename = if err.locationData.filename != nil: err.locationData.filename[] else: "?"
   let col      = err.locationData.col
@@ -105,14 +110,13 @@ proc errFormToStr*(text: string, err: Form, data: InternmentData): string =
   let lexeme   = text.split("\n")[line - 1]
   let errkind  = data.unintern(err.errSym.symInterned)
 
+  var maxLocLen = 0
   for name in err.errTrace.posValue:
-    let loc = name.locationData
-    let locFile = loc.filename[]
-    let locLine = loc.line
-    let locCol  = loc.col
-    let locStr  = fmt"{locFile}({locLine}:{locCol})"
+    maxLocLen = max(maxLocLen, locStrOf(name).len)
 
-    result = locStr & " ".repeat(max(30 - locStr.len, 1)) & "in " & data.unintern(name.symInterned) & "\n" & result
+  for name in err.errTrace.posValue:
+    let locStr = locStrOf(name)
+    result = locStr & " ".repeat(maxLocLen - locStr.len + 1) & "in " & data.unintern(name.symInterned) & "\n" & result
 
   result &= fmt"{filename}({line}:{col}) {errkind} {message}" & "\n"
   result &= "  |\n"
@@ -163,6 +167,14 @@ let `EVAL-BUILD`*     = requiredInterns.intern("BUILD")
 let `EVAL-APPLY`*     = requiredInterns.intern("APPLY")
 let `EVAL-BECOME`*    = requiredInterns.intern("BECOME")
 let `EVAL-DO`*        = requiredInterns.intern("DO")
+let `EVAL-HAS`*       = requiredInterns.intern("HAS")
+let `EVAL-PUT`*       = requiredInterns.intern("PUT")
+let `EVAL-APPEND`*    = requiredInterns.intern("APPEND")
+let `EVAL-IN`*        = requiredInterns.intern("IN")
+let `EVAL-WHILE`*     = requiredInterns.intern("WHILE")
+let `EVAL-MAP`*       = requiredInterns.intern("MAP")
+let `EVAL-FILTER`*    = requiredInterns.intern("FILTER")
+let `EVAL-REDUCE`*    = requiredInterns.intern("REDUCE")
 
 let `ERR-PARSER-ERROR`*    = requiredInterns.intern("ERR-PARSER-ERROR!")
 let `ERR-UNBOUND-SYMBOL`*  = requiredInterns.intern("ERR-UNBOUND-SYMBOL!")
@@ -271,43 +283,61 @@ proc toStr*(self: Form, data: InternmentData = newInternmentData()): string =
       " @" & filename & ":" & $loc.line & ":" & $loc.col & ")"
 
 template get*(map: Form, index: int): Form =
-  assert map.kind == fkMap, "get: not a map"
-  assert index >= 0 and index < map.posValue.len, "get: index out of range"
+  doAssert map.kind == fkMap, "get: not a map"
+  doAssert index >= 0 and index < map.posValue.len, "get: index out of range"
   map.posValue[index]
 
 proc get*(map: Form, key: Form): Form =
-  assert map.kind == fkMap, "get: not a map"
+  doAssert map.kind == fkMap, "get: not a map"
   if key.kind == fkInt and key.intValue >= 0 and key.intValue < map.posValue.len:
     map.posValue[key.intValue]
   else:
-    assert map.mapValue.hasKey(key), "get: key not found"
+    doAssert map.mapValue.hasKey(key), "get: key not found"
     map.mapValue[key]
 
 proc append*(map: Form, value: Form) =
-  assert map.kind == fkMap, "append: not a map"
+  doAssert map.kind == fkMap, "append: not a map"
   let key = newIntForm(map.posValue.len)
   if map.mapValue.hasKey(key):
     map.mapValue.del(key)
   map.posValue.add(value)
 
 proc hasKey*(map: Form, index: int): bool =
-  assert map.kind == fkMap, "hasKey: not a map"
+  doAssert map.kind == fkMap, "hasKey: not a map"
   index >= 0 and index < map.posValue.len
 
 proc hasKey*(map: Form, key: Form): bool =
-  assert map.kind == fkMap, "hasKey: not a map"
+  doAssert map.kind == fkMap, "hasKey: not a map"
   if key.kind == fkInt and key.intValue >= 0 and key.intValue < map.posValue.len:
     true
   else:
     map.mapValue.hasKey(key)
 
 proc put*(map: Form, key: Form, value: Form) =
-  assert map.kind == fkMap, "put: not a map"
-  if key.kind == fkInt and key.intValue >= 0 and key.intValue < map.posValue.len:
-    map.posValue[key.intValue] = value
+  doAssert map.kind == fkMap, "put: not a map"
+  if key.kind == fkInt and key.intValue >= 0:
+    let idx = key.intValue
+    if idx < map.posValue.len:
+      map.posValue[idx] = value
+
+    elif idx < 2 * map.posValue.len:
+      let oldLen = map.posValue.len
+
+      while map.posValue.len < idx:
+        map.posValue.add(newNilForm())
+
+      map.posValue.add(value)
+      for i in oldLen ..< map.posValue.len:
+        let k = newIntForm(i)
+        if map.mapValue.hasKey(k):
+          map.mapValue.del(k)
+
+    else:
+      map.mapValue[key] = value
+
   else:
     map.mapValue[key] = value
 
 proc len*(map: Form): int =
-  assert map.kind == fkMap, "len: not a map"
+  doAssert map.kind == fkMap, "len: not a map"
   map.posValue.len + map.mapValue.len
