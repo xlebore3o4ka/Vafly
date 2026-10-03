@@ -8,3 +8,4 @@ src/compiler.nim.deprecated
 all_files.txt
 examples/
 transpiled/
+bin/

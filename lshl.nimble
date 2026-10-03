@@ -17,7 +17,7 @@ task myRun, "Run with the required flags":
   exec "nimble --debugger:native --stacktrace:on --linetrace:on -d:debug --passC:-D_GNU_SOURCE -d:nimNoLentIterators run -- " & commandLineParams.join(" ")
 
 task allFiles, "Save all files content to file all_files.txt":
-  let ignoredPathes = @["./bin/*", "./.git/*", "./examples/*"]
+  let ignoredPathes = @["./bin/*", "./.git/*", "./examples/*", "./transpiled/*"]
   let ignoredNames  = @["all_files.txt", "gitchanges.txt", "LICENSE", "secrets.nim", "nimble.paths", "state.json"]
   
   var pathFilters = ""
