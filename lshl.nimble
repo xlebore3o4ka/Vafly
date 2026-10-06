@@ -34,3 +34,7 @@ task allFiles, "Save all files content to file all_files.txt":
 
 task gitChanges, "Save all changes to file gitchanges.txt":
   exec "git diff > gitchanges.txt"
+
+task testAll, "Run every test file inside tests/ grouped by subfolder":
+  exec "nim c -r --hints:off --warnings:off testAll.nim"
+  exec "rm -f testAll"

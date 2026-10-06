@@ -207,6 +207,7 @@ proc parseForm(self: Parser): Form =
     return self.parseQuote(loc)
 
   elif c == ':':
+    # TODO: if ')' after ':' then close all opened maps
     return self.parseKeyword(loc)
 
   elif c.isSym():

@@ -2,13 +2,15 @@ import forms
 import evaluator
 import std/[macros, tables]
 
-var globalCtx: Context
-var globalInternmentData: InternmentData
-var filenameRefs: Table[string, ref string]
+var globalCtx*: Context
+var globalInternmentData*: InternmentData
+var filenameRefs*: Table[string, ref string]
+
+type VaflyError* = CatchableError
 
 template init*() =
-  globalCtx = newContext()
   globalInternmentData = newInternmentData()
+  globalCtx = newContext(globalInternmentData)
   filenameRefs = initTable[string, ref string]()
 
 template eval*(form: Form): Form =
@@ -45,9 +47,9 @@ proc bad*(kind: FormKind): Form =
 template checkTop*(form: Form) =
   let f = eval(form)
   if f.kind == fkErr:
-    let fn = f.locationData.filename[]
-    if src.hasKey(fn):
-      stderr.writeLine(src[fn].errFormToStr(f, globalInternmentData))
+    let fn = f.locationData.filename
+    if fn != nil and src.hasKey(fn[]):
+      stderr.writeLine(src[fn[]].errFormToStr(f, globalInternmentData))
     else:
       stderr.writeLine(f.toStr(globalInternmentData))
-    quit(1)
+    raise newException(VaflyError, f.errMsg)

@@ -330,24 +330,22 @@ proc put*(map: Form, key: Form, value: Form) =
   doAssert map.kind == fkMap, "put: not a map"
   if key.kind == fkInt and key.intValue >= 0:
     let idx = key.intValue
+
     if idx < map.posValue.len:
       map.posValue[idx] = value
 
     elif idx < 2 * map.posValue.len:
-      let oldLen = map.posValue.len
-
       while map.posValue.len < idx:
         map.posValue.add(newNilForm())
-
       map.posValue.add(value)
-      for i in oldLen ..< map.posValue.len:
-        let k = newIntForm(i)
-        if map.mapValue.hasKey(k):
-          map.mapValue.del(k)
 
+    if idx < map.posValue.len:
+      let k = newIntForm(idx)
+      if map.mapValue.hasKey(k):
+        map.mapValue.del(k)
+        
     else:
       map.mapValue[key] = value
-
   else:
     map.mapValue[key] = value
 
